@@ -91,12 +91,19 @@ pub const Loader = struct {
 
         self.refreshBridge();
 
-        // 1) URL carried by the snapshot, 2) URL published by the Lua bridge plugin.
+        // 1) URL carried by the snapshot, 2) URL published by the Lua bridge plugin,
+        // 3) derived cover art URL for Navidrome/Subsonic or YouTube/YTMusic.
+        var remote_buf: [4096]u8 = undefined;
         var url: []const u8 = snap.art_url.get();
         if (url.len == 0 and self.bridge_url.items.len > 0 and
             self.bridge_path_hash == std.hash.Wyhash.hash(0, snap.path.get()))
         {
             url = self.bridge_url.items;
+        }
+        if (url.len == 0) {
+            if (deriveRemoteArtUrl(snap.path.get(), &remote_buf)) |derived| {
+                url = derived;
+            }
         }
         if (url.len > 0) {
             const uh = std.hash.Wyhash.hash(1, url);
@@ -247,14 +254,52 @@ fn percentDecode(s: []const u8, buf: []u8) []const u8 {
     var i: usize = 0;
     while (i < s.len and o < buf.len) : (o += 1) {
         if (s[i] == '%' and i + 2 < s.len) {
-            buf[o] = std.fmt.parseInt(u8, s[i + 1 .. i + 3], 16) catch '%';
-            i += 3;
-        } else {
-            buf[o] = s[i];
-            i += 1;
+            if (std.fmt.parseInt(u8, s[i + 1 .. i + 3], 16)) |val| {
+                buf[o] = val;
+                i += 3;
+                continue;
+            } else |_| {}
         }
+        buf[o] = s[i];
+        i += 1;
     }
     return buf[0..o];
+}
+
+/// Derives a cover art URL from remote stream/track URLs when album_art_url is omitted
+/// (e.g. Navidrome/Subsonic /rest/stream and YouTube / YouTube Music watch URLs in cliamp v2.3.0 headless).
+pub fn deriveRemoteArtUrl(path: []const u8, buf: []u8) ?[]const u8 {
+    if (std.mem.startsWith(u8, path, "http://") or std.mem.startsWith(u8, path, "https://")) {
+        const subsonic_needles = [_][]const u8{
+            "/rest/stream.view?",
+            "/rest/stream?",
+            "/rest/download.view?",
+            "/rest/download?",
+        };
+        for (subsonic_needles) |needle| {
+            if (std.mem.indexOf(u8, path, needle)) |idx| {
+                return std.fmt.bufPrint(buf, "{s}/rest/getCoverArt?{s}", .{ path[0..idx], path[idx + needle.len ..] }) catch null;
+            }
+        }
+
+        if (std.mem.indexOf(u8, path, "youtube.com/watch") != null) {
+            const vkey = if (std.mem.indexOf(u8, path, "?v=")) |i| i + 3 else if (std.mem.indexOf(u8, path, "&v=")) |i| i + 3 else return null;
+            const rest = path[vkey..];
+            const end = std.mem.indexOfAny(u8, rest, "&?#/") orelse rest.len;
+            const id = rest[0..end];
+            if (id.len == 11) {
+                return std.fmt.bufPrint(buf, "https://i.ytimg.com/vi/{s}/hqdefault.jpg", .{id}) catch null;
+            }
+        } else if (std.mem.indexOf(u8, path, "youtu.be/")) |idx| {
+            const rest = path[idx + "youtu.be/".len ..];
+            const end = std.mem.indexOfAny(u8, rest, "&?#/") orelse rest.len;
+            const id = rest[0..end];
+            if (id.len == 11) {
+                return std.fmt.bufPrint(buf, "https://i.ytimg.com/vi/{s}/hqdefault.jpg", .{id}) catch null;
+            }
+        }
+    }
+    return null;
 }
 
 fn rgbToHsv(r: f32, g: f32, b: f32) [3]f32 {
@@ -396,4 +441,64 @@ fn hsvToRgb(h: f32, s: f32, v: f32) [3]f32 {
         else => .{ v, p, q },
     };
     return .{ rgb[0] * 255, rgb[1] * 255, rgb[2] * 255 };
+}
+
+test "placeholder, percentDecode, data URL, sidecar, and bridge parsing" {
+    const alloc = std.testing.allocator;
+
+    // 1. Placeholder generation & palette
+    const ph = try placeholder(alloc, 123);
+    defer ph.destroy(alloc);
+    try std.testing.expect(ph.is_placeholder);
+    try std.testing.expectEqual(SRC * SRC * 3, ph.px.len);
+
+    // 2. percentDecode
+    var dbuf: [64]u8 = undefined;
+    try std.testing.expectEqualStrings("/a b/c%zz", percentDecode("/a%20b/c%zz", &dbuf));
+
+    // 3. data: base64 PNG decode via ffmpeg + loadLocal sidecar
+    var client = cliamp.Client{ .alloc = alloc };
+    var loader = Loader{ .alloc = alloc, .client = &client };
+    defer loader.bridge_url.deinit(alloc);
+
+    // 1x1 red PNG
+    const red_png_b64 = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC";
+    const img_data = try loader.loadUrl(red_png_b64);
+    defer img_data.destroy(alloc);
+    try std.testing.expectEqual(SRC * SRC * 3, img_data.px.len);
+    try std.testing.expect(img_data.avg.r > 200 and img_data.avg.g < 20);
+
+    // 4. Sidecar cover.png + file:// URL
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const b64_part = red_png_b64["data:image/png;base64,".len..];
+    const dec_len = try std.base64.standard.Decoder.calcSizeForSlice(b64_part);
+    const png_bytes = try alloc.alloc(u8, dec_len);
+    defer alloc.free(png_bytes);
+    try std.base64.standard.Decoder.decode(png_bytes, b64_part);
+    try tmp.dir.writeFile(.{ .sub_path = "cover.png", .data = png_bytes });
+    try tmp.dir.writeFile(.{ .sub_path = "track.mp3", .data = "not a real mp3" });
+
+    var pbuf: [512]u8 = undefined;
+    const tmp_abs = try tmp.dir.realpath(".", &pbuf);
+    var tbuf: [600]u8 = undefined;
+    const track_abs = try std.fmt.bufPrint(&tbuf, "{s}/track.mp3", .{tmp_abs});
+    const img_sidecar = try loader.loadLocal(track_abs);
+    defer img_sidecar.destroy(alloc);
+    try std.testing.expectEqual(SRC * SRC * 3, img_sidecar.px.len);
+    try std.testing.expect(img_sidecar.avg.r > 200);
+
+    var ubuf: [640]u8 = undefined;
+    const file_url = try std.fmt.bufPrint(&ubuf, "file://{s}/cover.png", .{tmp_abs});
+    const img_file = try loader.loadUrl(file_url);
+    defer img_file.destroy(alloc);
+    try std.testing.expect(img_file.avg.r > 200);
+
+    // 5. Remote art URL derivation (Navidrome / Subsonic and YouTube Music)
+    var rbuf: [512]u8 = undefined;
+    const navi = deriveRemoteArtUrl("http://ubuntu01.local:30533/rest/stream?id=tr-42&u=cliamp&t=abc&s=xyz&v=1.16.1&c=cliamp", &rbuf);
+    try std.testing.expectEqualStrings("http://ubuntu01.local:30533/rest/getCoverArt?id=tr-42&u=cliamp&t=abc&s=xyz&v=1.16.1&c=cliamp", navi.?);
+    const yt = deriveRemoteArtUrl("https://music.youtube.com/watch?v=dQw4w9WgXcQ&list=RD1", &rbuf);
+    try std.testing.expectEqualStrings("https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg", yt.?);
+    try std.testing.expect(deriveRemoteArtUrl("/home/rob/Music/song.mp3", &rbuf) == null);
 }
