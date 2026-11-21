@@ -198,6 +198,12 @@ pub fn main() !void {
     var fx_color: render.FxColorMode = .cover;
     var disc_res: render.DiscRes = .high;
     var aa = true;
+    var info_mode: render.InfoMode = .auto;
+    const AutoInfoPhase = enum { hidden, full_hold, full_fadeout, track_fadein, track_hold, track_fadeout };
+    var info_phase: AutoInfoPhase = .full_hold;
+    var info_timer: f32 = 0;
+    var prev_play_state: cliamp.PlayState = .unknown;
+    var last_track_key: u64 = 0;
     var hud_msg: []const u8 = "";
     var hud_timer: f32 = 0;
     const rpm_presets = [_]f32{ 28.0, 33.333, 45.0, 78.0, 0.0, 16.666 };
@@ -326,6 +332,23 @@ pub fn main() !void {
                     hud_msg = if (aa) " AA on " else " AA off ";
                     hud_timer = 2.0;
                 },
+                'm' => {
+                    info_mode = switch (info_mode) {
+                        .auto => .show,
+                        .show => .hide,
+                        .hide => .auto,
+                    };
+                    if (info_mode == .auto) {
+                        info_phase = .full_hold;
+                        info_timer = 0;
+                    }
+                    hud_msg = switch (info_mode) {
+                        .auto => " info: auto ",
+                        .show => " info: show ",
+                        .hide => " info: hide ",
+                    };
+                    hud_timer = 2.0;
+                },
                 '?', 'h' => show_help = !show_help,
                 else => {},
             }
@@ -375,6 +398,97 @@ pub fn main() !void {
         spin += (target - spin) * @min(1.0, dt * 2.5);
         angle = @mod(angle + spin * dt, std.math.tau);
 
+        // info bar visibility / fade state machine
+        const cur_track_key: u64 = if (snap.connected and (snap.path.len > 0 or snap.title.len > 0)) blk: {
+            var h = std.hash.Wyhash.init(0);
+            h.update(snap.path.get());
+            h.update("\x00");
+            h.update(snap.title.get());
+            break :blk h.final();
+        } else 0;
+        const track_changed = cur_track_key != 0 and last_track_key != 0 and cur_track_key != last_track_key;
+        if (cur_track_key != 0) last_track_key = cur_track_key;
+
+        var info_alpha: f32 = 1.0;
+        var info_seekbar: bool = true;
+        if (snap.state == .paused or !snap.connected) {
+            // Pause always shows the full bar immediately with zero fade in every mode
+            info_alpha = 1.0;
+            info_seekbar = true;
+        } else {
+            if (prev_play_state == .paused and info_mode == .auto) {
+                info_phase = .full_hold;
+                info_timer = 0;
+            }
+            if (track_changed and info_mode == .auto) {
+                info_phase = .track_fadein;
+                info_timer = 0;
+            }
+            switch (info_mode) {
+                .show => {
+                    info_alpha = 1.0;
+                    info_seekbar = true;
+                },
+                .hide => {
+                    info_alpha = 0.0;
+                    info_seekbar = false;
+                },
+                .auto => {
+                    info_timer += dt;
+                    switch (info_phase) {
+                        .full_hold => {
+                            info_alpha = 1.0;
+                            info_seekbar = true;
+                            if (info_timer >= 5.0) {
+                                info_phase = .full_fadeout;
+                                info_timer = 0;
+                            }
+                        },
+                        .full_fadeout => {
+                            const t = std.math.clamp(info_timer / 1.2, 0.0, 1.0);
+                            info_alpha = 1.0 - t * t * (3.0 - 2.0 * t);
+                            info_seekbar = true;
+                            if (info_timer >= 1.2) {
+                                info_phase = .hidden;
+                                info_timer = 0;
+                            }
+                        },
+                        .track_fadein => {
+                            const t = std.math.clamp(info_timer / 2.4, 0.0, 1.0);
+                            info_alpha = t * t * (3.0 - 2.0 * t);
+                            info_seekbar = false;
+                            if (info_timer >= 2.4) {
+                                info_phase = .track_hold;
+                                info_timer = 0;
+                            }
+                        },
+                        .track_hold => {
+                            info_alpha = 1.0;
+                            info_seekbar = false;
+                            if (info_timer >= 10.0) {
+                                info_phase = .track_fadeout;
+                                info_timer = 0;
+                            }
+                        },
+                        .track_fadeout => {
+                            const t = std.math.clamp(info_timer / 2.4, 0.0, 1.0);
+                            info_alpha = 1.0 - t * t * (3.0 - 2.0 * t);
+                            info_seekbar = false;
+                            if (info_timer >= 2.4) {
+                                info_phase = .hidden;
+                                info_timer = 0;
+                            }
+                        },
+                        .hidden => {
+                            info_alpha = 0.0;
+                            info_seekbar = false;
+                        },
+                    }
+                },
+            }
+        }
+        prev_play_state = snap.state;
+
         kitty_out.clearRetainingCapacity();
         const force_redraw = screen.force;
         renderer.render(&screen, .{
@@ -409,6 +523,8 @@ pub fn main() !void {
             .cell_px_w = cell_px_w,
             .disc_res = disc_res,
             .aa = aa,
+            .info_alpha = info_alpha,
+            .info_seekbar = info_seekbar,
         });
         term.writeAll(try screen.flush(kitty_out.items));
 

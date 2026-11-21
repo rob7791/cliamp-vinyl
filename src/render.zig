@@ -100,6 +100,7 @@ pub const Texture = struct {
 pub const BgMode = enum { tint, black };
 pub const PeakMode = enum { ellipsis, path, peak };
 pub const FxColorMode = enum { cover, spectrum };
+pub const InfoMode = enum { auto, show, hide };
 pub const DiscRes = enum {
     med,
     high,
@@ -154,6 +155,8 @@ pub const Params = struct {
     cell_px_w: f32 = 0,
     disc_res: DiscRes = .high,
     aa: bool = true,
+    info_alpha: f32 = 1.0,
+    info_seekbar: bool = true,
 };
 
 pub const Renderer = struct {
@@ -455,10 +458,10 @@ pub const Renderer = struct {
             self.updateRing(&p);
             if (p.glow and self.kick_glow > 0.004) {
                 const glow_src = if (p.fx_color == .spectrum) pathBandColor(self.kick_dom_u) else pal.c1;
-                self.drawGlow(s, cx, cy, rd, rmax, vis_rows, k, glow_src, pal.c2, bgf);
+                self.drawGlow(s, cx, cy, rd, rmax, s.rows, k, glow_src, pal.c2, bgf);
             }
             if (p.aurora and (self.sub_l > 0.004 or self.sub_r > 0.004)) {
-                self.drawAurora(s, vis_rows, p.fx_color);
+                self.drawAurora(s, s.rows, p.fx_color);
             }
             self.drawRing(s, &p, cx, cy, rd, r0, ring_h, ring_min, vis_rows, pal.c1, pal.c2, bgf);
 
@@ -989,6 +992,7 @@ pub const Renderer = struct {
                 " a       aurora sub-bass on/off",
                 " c       colori fx cover/freq",
                 " d / x   risoluzione / AA disco",
+                " m       info auto/mostra/nascondi",
                 " l       riflessi on/off",
                 " b       sfondo tinta/nero",
                 " i       inverti bassi su/giù",
@@ -1006,20 +1010,23 @@ pub const Renderer = struct {
             for (lines, 0..) |l, i| _ = s.text(col_start, row_start + i, l, light, false);
         }
 
-        if (vis_rows == s.rows) return;
+        if (vis_rows == s.rows or p.info_alpha <= 0.01) return;
+        const ia = std.math.clamp(p.info_alpha, 0.0, 1.0);
         const r1 = vis_rows + 1;
         if (!snap.connected) {
-            centered(s, r1, "in attesa di cliamp... (avvia `cliamp` o lascia che vinyl lanci il demone)", dim, false);
+            centeredAlpha(s, r1, "in attesa di cliamp... (avvia `cliamp` o lascia che vinyl lanci il demone)", dim, false, ia);
             return;
         }
         const title = if (snap.title.len > 0) snap.title.get() else std.fs.path.basename(snap.path.get());
-        centered(s, r1, title, light, true);
+        centeredAlpha(s, r1, title, light, true, ia);
         const sub = blk: {
             if (snap.artist.len > 0 and snap.album.len > 0)
                 break :blk std.fmt.bufPrint(&buf, "{s} — {s}", .{ snap.artist.get(), snap.album.get() }) catch "";
             break :blk snap.artist.get();
         };
-        centered(s, r1 + 1, sub, dim, false);
+        centeredAlpha(s, r1 + 1, sub, dim, false, ia);
+
+        if (!p.info_seekbar) return;
 
         const r3 = r1 + 2;
         if (r3 >= s.rows) return;
@@ -1041,36 +1048,34 @@ pub const Renderer = struct {
         const bar_w: usize = @min(cols -| 30, 70);
         const total = 2 + lt.len + 1 + bar_w + 1 + rt.len;
         var c: usize = (cols -| total) / 2;
-        c = s.text(c, r3, icon, light, true);
-        c = s.text(c + 1, r3, lt, dim, false);
+        c = s.textAlpha(c, r3, icon, light, true, ia);
+        c = s.textAlpha(c + 1, r3, lt, dim, false, ia);
         c += 1;
         const frac: f64 = if (snap.duration > 0) std.math.clamp(p.position / snap.duration, 0, 1) else 0;
         const filled: usize = @intFromFloat(frac * @as(f64, @floatFromInt(bar_w)));
         for (0..bar_w) |i| {
             if (c >= cols) break;
             const cell = s.at(c, r3);
-            if (i < filled) {
-                cell.cp = 0x2501; // ━
-                cell.fg = toRgb(mix3(c1, c2, @as(f32, @floatFromInt(i)) / @as(f32, @floatFromInt(@max(bar_w, 1)))));
-            } else if (i == filled) {
-                cell.cp = 0x25CF; // ●
-                cell.fg = light;
-            } else {
-                cell.cp = 0x2500; // ─
-                cell.fg = faint;
-            }
+            const raw_fg = if (i < filled)
+                toRgb(mix3(c1, c2, @as(f32, @floatFromInt(i)) / @as(f32, @floatFromInt(@max(bar_w, 1)))))
+            else if (i == filled)
+                light
+            else
+                faint;
+            cell.cp = if (i < filled) 0x2501 else if (i == filled) 0x25CF else 0x2500;
+            cell.fg = if (ia >= 0.995) raw_fg else toRgb(mix3(toF(cell.bg), toF(raw_fg), ia));
             c += 1;
         }
-        c = s.text(c + 1, r3, rt, dim, false);
-        _ = s.text(c, r3, modes, faint, false);
+        c = s.textAlpha(c + 1, r3, rt, dim, false, ia);
+        _ = s.textAlpha(c, r3, modes, faint, false, ia);
     }
 };
 
-fn centered(s: *Screen, r: usize, t: []const u8, fg: Rgb, bold: bool) void {
-    if (r >= s.rows) return;
+fn centeredAlpha(s: *Screen, r: usize, t: []const u8, fg: Rgb, bold: bool, alpha: f32) void {
+    if (r >= s.rows or alpha <= 0.01) return;
     const n = std.unicode.utf8CountCodepoints(t) catch t.len;
     const c = (s.cols -| n) / 2;
-    _ = s.text(c, r, t, fg, bold);
+    _ = s.textAlpha(c, r, t, fg, bold, alpha);
 }
 
 fn fmtTime(buf: []u8, secs: f64) []const u8 {

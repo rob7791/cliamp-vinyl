@@ -129,6 +129,7 @@ Tutti gli argomenti non riconosciuti da `vinyl` vengono inoltrati direttamente a
 | `c` | Alterna i colori di bagliore cassa e aurora tra quelli derivati dalla copertina/scurimento (`cover`) e quelli coerenti con la frequenza predominante (`rebeccapurple` per aurora, tra `rebeccapurple` e `teal` per cassa) |
 | `d` | Cicla la risoluzione massima del disco Kitty: `512px` *(default)* → `768px` (ultra) → `384px` (veloce) |
 | `x` | Attiva/disattiva l'antialiasing del disco (bordo circolare + filtro bilineare vs nearest-neighbor) |
+| `m` | Cicla la barra info/seekbar: `auto` *(default: fadeout dopo 5s, fade-in/out lento solo 2 righe al cambio brano per 10s, barra completa immediata in pausa)* → `show` → `hide` |
 | `l` | Attiva/disattiva i riflessi del vinile |
 | `b` | Alterna lo sfondo tra tinta derivata dalla copertina e nero |
 | `i` | Inverte l'orientamento delle frequenze (bassi in alto / in basso) |

@@ -64,15 +64,31 @@ pub const Screen = struct {
 
     /// Writes UTF-8 text at (c, r); returns the column after the text.
     pub fn text(self: *Screen, c0: usize, r: usize, s: []const u8, fg: Rgb, bold: bool) usize {
-        if (r >= self.rows) return c0;
+        return self.textAlpha(c0, r, s, fg, bold, 1.0);
+    }
+
+    /// Writes UTF-8 text at (c, r) blended against each cell's existing background by `alpha` (0..1).
+    /// Preserves cell.bg so the text floats with no background box.
+    pub fn textAlpha(self: *Screen, c0: usize, r: usize, s: []const u8, fg: Rgb, bold: bool, alpha: f32) usize {
+        if (r >= self.rows or alpha <= 0.01) return c0;
+        const a = std.math.clamp(alpha, 0.0, 1.0);
+        const ia = 1.0 - a;
         var c = c0;
         var it = (std.unicode.Utf8View.init(s) catch return c0).iterator();
         while (it.nextCodepoint()) |cp| {
             if (c >= self.cols) break;
             const cell = self.at(c, r);
             cell.cp = if (cp < 0x20) ' ' else cp;
-            cell.fg = fg;
-            cell.bold = bold;
+            if (a >= 0.995) {
+                cell.fg = fg;
+            } else {
+                cell.fg = .{
+                    .r = @intFromFloat(@as(f32, @floatFromInt(cell.bg.r)) * ia + @as(f32, @floatFromInt(fg.r)) * a),
+                    .g = @intFromFloat(@as(f32, @floatFromInt(cell.bg.g)) * ia + @as(f32, @floatFromInt(fg.g)) * a),
+                    .b = @intFromFloat(@as(f32, @floatFromInt(cell.bg.b)) * ia + @as(f32, @floatFromInt(fg.b)) * a),
+                };
+            }
+            cell.bold = bold and a >= 0.35;
             c += 1;
         }
         return c;
