@@ -122,6 +122,7 @@ Tutti gli argomenti non riconosciuti da `vinyl` vengono inoltrati direttamente a
 | `{` / `}` | Regolazione fine della velocità di rotazione di ±1 RPM |
 | `v` | Cicla i preset vinile (`33.3`, `45`, `78`, `0`, `16.7` RPM) |
 | `0` | Ripristina la velocità predefinita (`33.3` RPM) |
+| `w` | Alterna tra la linea **path** `skyblue` 1:1 senza delay/smoothing e i classici `peak` con decay |
 | `l` | Attiva/disattiva i riflessi del vinile |
 | `b` | Alterna lo sfondo tra tinta derivata dalla copertina e nero |
 | `i` | Inverte l'orientamento delle frequenze (bassi in alto / in basso) |

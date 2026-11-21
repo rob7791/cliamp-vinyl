@@ -77,6 +77,7 @@ pub const Texture = struct {
 };
 
 pub const BgMode = enum { tint, black };
+pub const PeakMode = enum { path, peak };
 
 pub const Params = struct {
     aspect: f32, // cell height / cell width
@@ -84,6 +85,8 @@ pub const Params = struct {
     dt: f32,
     left: []const f32,
     right: []const f32,
+    raw_left: []const f32 = &.{},
+    raw_right: []const f32 = &.{},
     snap: *const cliamp.Snapshot,
     position: f64,
     sheen: bool,
@@ -93,6 +96,8 @@ pub const Params = struct {
     fps: f32,
     rpm: f32 = 33.333,
     show_rpm: bool = false,
+    peak_mode: PeakMode = .path,
+    hud_msg: []const u8 = "",
     bg_mode: BgMode,
     cava_ok: bool,
     kitty_enc: ?*kitty.Encoder = null,
@@ -109,6 +114,7 @@ pub const Renderer = struct {
     old_tex: Texture = .{},
     fade: f32 = 1.0,
     amp: [ANG]f32 = [_]f32{0} ** ANG,
+    raw_amp: [ANG]f32 = [_]f32{0} ** ANG,
     peak: [ANG]f32 = [_]f32{0} ** ANG,
     tex_size_for: usize = 0,
     img_gen: u64 = 0,
@@ -172,6 +178,8 @@ pub const Renderer = struct {
     fn updateRing(self: *Renderer, p: *const Params) void {
         const n = p.left.len;
         const nf: f32 = @floatFromInt(n - 1);
+        const raw_l = if (p.raw_left.len == n) p.raw_left else p.left;
+        const raw_r = if (p.raw_right.len == n) p.raw_right else p.right;
         const decay = p.dt * 0.55;
         for (0..ANG) |a| {
             const th = (@as(f32, @floatFromInt(a)) + 0.5) / ANG * TAU;
@@ -186,6 +194,10 @@ pub const Renderer = struct {
             v = std.math.clamp(v, 0, 1);
             self.amp[a] = v;
             self.peak[a] = @max(v, self.peak[a] - decay);
+
+            // Direct 1:1 piecewise-linear sample of raw unfiltered frequencies (no smoothing, no delay)
+            const rv = if (right_side) linSample(raw_r, fpos) else linSample(raw_l, fpos);
+            self.raw_amp[a] = std.math.clamp(rv, 0, 1);
         }
     }
 
@@ -378,7 +390,9 @@ pub const Renderer = struct {
         const c_hi: usize = @min(s.cols, @as(usize, @intFromFloat(@ceil(cx + outer_max))) + 1);
         const dot_bits = [4][2]u8{ .{ 0x01, 0x08 }, .{ 0x02, 0x10 }, .{ 0x04, 0x20 }, .{ 0x40, 0x80 } };
         const peak_w = k * 0.13;
+        const path_w = k * 0.14;
         const white = [3]f32{ 255, 255, 255 };
+        const skyblue = Rgb{ .r = 135, .g = 206, .b = 235 };
 
         var r = r_lo;
         while (r < r_hi) : (r += 1) {
@@ -393,6 +407,7 @@ pub const Renderer = struct {
                 var bits: u8 = 0;
                 var acc = [3]f32{ 0, 0, 0 };
                 var lit: f32 = 0;
+                var has_path = false;
                 for (0..4) |j| {
                     for (0..2) |i| {
                         const dx = @as(f32, @floatFromInt(c)) + 0.25 + 0.5 * @as(f32, @floatFromInt(i)) - cx;
@@ -404,16 +419,39 @@ pub const Renderer = struct {
                         const idx = @min(ANG - 1, @as(usize, @intFromFloat(th / TAU * ANG)));
                         const v = self.amp[idx];
                         const top = r0 + ring_min + v * ring_h;
-                        const pk = r0 + ring_min + self.peak[idx] * ring_h + peak_w * 1.5;
+
+                        var on_path = false;
+                        if (p.peak_mode == .path) {
+                            const prev_idx: usize = if (idx == 0) ANG - 1 else idx - 1;
+                            const next_idx: usize = if (idx + 1 >= ANG) 0 else idx + 1;
+                            const r_cur = r0 + ring_min + self.raw_amp[idx] * ring_h;
+                            const r_prev = r0 + ring_min + self.raw_amp[prev_idx] * ring_h;
+                            const r_next = r0 + ring_min + self.raw_amp[next_idx] * ring_h;
+                            const mid_prev = (r_cur + r_prev) * 0.5;
+                            const mid_next = (r_cur + r_next) * 0.5;
+                            const seg_lo = @min(r_cur, @min(mid_prev, mid_next)) - path_w;
+                            const seg_hi = @max(r_cur, @max(mid_prev, mid_next)) + path_w;
+                            if (rho >= seg_lo and rho <= seg_hi) {
+                                on_path = true;
+                                has_path = true;
+                            }
+                        }
+
                         var col: [3]f32 = undefined;
-                        if (rho <= top) {
+                        if (on_path) {
+                            bits |= dot_bits[j][i];
+                            continue;
+                        } else if (rho <= top) {
                             const q = std.math.clamp((rho - r0) / ring_h, 0, 1);
                             col = mix3(c1, c2, q);
                             if (top - rho < 0.6) col = mix3(col, white, 0.35);
                             const dim = 0.55 + 0.45 * std.math.clamp(v * 1.4 + 0.2, 0, 1);
                             col = .{ col[0] * dim, col[1] * dim, col[2] * dim };
-                        } else if (@abs(rho - pk) < peak_w and self.peak[idx] > v + 0.02) {
-                            col = mix3(c2, white, 0.5);
+                        } else if (p.peak_mode == .peak) {
+                            const pk = r0 + ring_min + self.peak[idx] * ring_h + peak_w * 1.5;
+                            if (@abs(rho - pk) < peak_w and self.peak[idx] > v + 0.02) {
+                                col = mix3(c2, white, 0.5);
+                            } else continue;
                         } else continue;
                         bits |= dot_bits[j][i];
                         acc[0] += col[0];
@@ -425,7 +463,7 @@ pub const Renderer = struct {
                 if (bits == 0) continue;
                 const cell = s.at(c, r);
                 cell.cp = 0x2800 + @as(u21, bits);
-                cell.fg = toRgb(.{ acc[0] / lit, acc[1] / lit, acc[2] / lit });
+                cell.fg = if (has_path) skyblue else toRgb(.{ acc[0] / lit, acc[1] / lit, acc[2] / lit });
                 cell.bg = toRgb(bgf);
             }
         }
@@ -455,10 +493,12 @@ pub const Renderer = struct {
         const warn_col = Rgb{ .r = 250, .g = 200, .b = 90 };
         var buf: [1024]u8 = undefined;
 
-        const top_hud = p.show_fps or p.show_rpm;
+        const top_hud = p.show_fps or p.show_rpm or p.hud_msg.len > 0;
         if (p.show_fps) {
-            const t = std.fmt.bufPrint(&buf, " {d:.1} fps · {d:.1} rpm ", .{ p.fps, p.rpm }) catch "";
+            const t = std.fmt.bufPrint(&buf, " {d:.1} fps · {d:.1} rpm{s} ", .{ p.fps, p.rpm, if (p.hud_msg.len > 0) p.hud_msg else "" }) catch "";
             _ = s.text(0, 0, t, faint, false);
+        } else if (p.hud_msg.len > 0) {
+            _ = s.text(0, 0, p.hud_msg, light, true);
         } else if (p.show_rpm) {
             const t = std.fmt.bufPrint(&buf, " {d:.1} rpm ", .{p.rpm}) catch "";
             _ = s.text(0, 0, t, light, true);
@@ -480,6 +520,7 @@ pub const Renderer = struct {
                 " s / r   shuffle / repeat",
                 " [ / ]   spin ∓5 RPM ({/} ∓1)",
                 " v / 0   preset RPM / reset",
+                " w       path 1:1 / peak",
                 " l       riflessi on/off",
                 " b       sfondo tinta/nero",
                 " i       inverti bassi su/giù",
@@ -586,6 +627,17 @@ fn catmull(v: []const f32, x: f32) f32 {
     const t2 = t * t;
     const t3 = t2 * t;
     return 0.5 * ((2 * p1) + (-p0 + p2) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t2 + (-p0 + 3 * p1 - 3 * p2 + p3) * t3);
+}
+
+fn linSample(v: []const f32, x: f32) f32 {
+    if (v.len == 0) return 0;
+    if (v.len == 1) return v[0];
+    const max_i: f32 = @floatFromInt(v.len - 1);
+    const xc = std.math.clamp(x, 0, max_i);
+    const idx0: usize = @intFromFloat(@floor(xc));
+    const idx1: usize = @min(idx0 + 1, v.len - 1);
+    const t = xc - @as(f32, @floatFromInt(idx0));
+    return v[idx0] + (v[idx1] - v[idx0]) * t;
 }
 
 fn smoothstep(e0: f32, e1: f32, x: f32) f32 {
@@ -714,4 +766,52 @@ test "render aligns Kitty disc with circular Braille ring without overlap" {
         }
     }
     try std.testing.expect(braille_count > 40);
+}
+
+test "PeakMode.path draws skyblue 1:1 path from raw spectrum without smoothing" {
+    const alloc = std.testing.allocator;
+    var r = Renderer{ .alloc = alloc };
+    defer r.deinit();
+    r.setImage(try art.placeholder(alloc, 7));
+
+    var s = Screen.init(alloc);
+    defer s.deinit();
+    try s.resize(120, 40);
+
+    var snap = cliamp.Snapshot{ .connected = true, .state = .playing };
+    const zero_bars = [_]f32{0.0} ** 16;
+    const raw_bars = [_]f32{0.85} ** 16;
+
+    r.render(&s, .{
+        .aspect = 2.0,
+        .angle = 0.0,
+        .dt = 1.0 / 60.0,
+        .left = &zero_bars,
+        .right = &zero_bars,
+        .raw_left = &raw_bars,
+        .raw_right = &raw_bars,
+        .snap = &snap,
+        .position = 0,
+        .sheen = false,
+        .bass_top = false,
+        .show_fps = false,
+        .show_help = false,
+        .fps = 60.0,
+        .peak_mode = .path,
+        .bg_mode = .black,
+        .cava_ok = true,
+    });
+
+    var skyblue_cells: usize = 0;
+    for (0..36) |row| {
+        for (0..120) |col| {
+            const cell = s.at(col, row);
+            if (cell.cp >= 0x2800 and cell.cp <= 0x28FF and
+                cell.fg.r == 135 and cell.fg.g == 206 and cell.fg.b == 235)
+            {
+                skyblue_cells += 1;
+            }
+        }
+    }
+    try std.testing.expect(skyblue_cells > 30);
 }

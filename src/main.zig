@@ -188,6 +188,9 @@ pub fn main() !void {
     var spin: f32 = 0; // rad/s
     var rpm: f32 = opts.rpm;
     var rpm_hud_timer: f32 = 0;
+    var peak_mode: render.PeakMode = .path;
+    var hud_msg: []const u8 = "";
+    var hud_timer: f32 = 0;
     const rpm_presets = [_]f32{ 33.333, 45.0, 78.0, 0.0, 16.666 };
     var sheen = opts.sheen;
     var bass_top = opts.bass_top;
@@ -266,6 +269,11 @@ pub fn main() !void {
                     rpm = 33.333;
                     rpm_hud_timer = 2.0;
                 },
+                'w' => {
+                    peak_mode = if (peak_mode == .path) .peak else .path;
+                    hud_msg = if (peak_mode == .path) " path (1:1) " else " peak ";
+                    hud_timer = 2.0;
+                },
                 '?', 'h' => show_help = !show_help,
                 else => {},
             }
@@ -290,8 +298,8 @@ pub fn main() !void {
         for (0..nb) |b| {
             const tl = cava.left[b];
             const tr = cava.right[b];
-            left[b] += (tl - left[b]) * (if (tl > left[b]) @min(1.0, dt * 32.0) else @min(1.0, dt * 11.0));
-            right[b] += (tr - right[b]) * (if (tr > right[b]) @min(1.0, dt * 32.0) else @min(1.0, dt * 11.0));
+            left[b] += (tl - left[b]) * (if (tl > left[b]) @min(1.0, dt * 20.0) else @min(1.0, dt * 7.5));
+            right[b] += (tr - right[b]) * (if (tr > right[b]) @min(1.0, dt * 20.0) else @min(1.0, dt * 7.5));
         }
         const snap = client.get();
         var pos = snap.position;
@@ -301,6 +309,7 @@ pub fn main() !void {
 
         // turntable inertia
         if (rpm_hud_timer > 0) rpm_hud_timer = @max(0.0, rpm_hud_timer - dt);
+        if (hud_timer > 0) hud_timer = @max(0.0, hud_timer - dt);
         const rpm_speed: f32 = rpm / 60.0 * std.math.tau;
         const target: f32 = if (snap.state == .playing) rpm_speed else 0;
         spin += (target - spin) * @min(1.0, dt * 2.5);
@@ -314,6 +323,8 @@ pub fn main() !void {
             .dt = dt,
             .left = left[0..nb],
             .right = right[0..nb],
+            .raw_left = cava.left[0..nb],
+            .raw_right = cava.right[0..nb],
             .snap = &snap,
             .position = pos,
             .sheen = sheen,
@@ -323,6 +334,8 @@ pub fn main() !void {
             .fps = fps_val,
             .rpm = rpm,
             .show_rpm = rpm_hud_timer > 0,
+            .peak_mode = peak_mode,
+            .hud_msg = if (hud_timer > 0) hud_msg else "",
             .bg_mode = bg_mode,
             .cava_ok = cava.ok,
             .kitty_enc = if (use_kitty) &kitty_enc else null,

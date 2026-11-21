@@ -50,7 +50,7 @@ pub const Cava = struct {
             \\data_format = binary
             \\bit_format = 16bit
             \\[smoothing]
-            \\noise_reduction = 55
+            \\noise_reduction = 0
             \\
         , .{ @min(fps, 240), self.per_channel * 2, source orelse "auto" });
         {
