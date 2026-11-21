@@ -475,18 +475,20 @@ pub const Renderer = struct {
             const lines = [_][]const u8{
                 " spazio  play/pausa",
                 " n / p   traccia succ./prec.",
-                " <- / -> seek -/+5s",
-                " ^ / v   volume +/-1dB",
+                " ← / →   seek ∓5s",
+                " ↑ / ↓   volume ±1dB",
                 " s / r   shuffle / repeat",
                 " l       riflessi on/off",
                 " b       sfondo tinta/nero",
-                " i       inverti bassi su/giu",
+                " i       inverti bassi su/giù",
                 " f       mostra fps",
                 " q       esci",
             };
             const help_w: usize = 30;
             const col_start: usize = if (disc_cols > 0 and cols >= disc_col0 + disc_cols + help_w + 1)
                 cols - help_w - 1
+            else if (disc_cols > 0 and disc_col0 >= help_w + 1)
+                1
             else
                 0;
             const row_start: usize = if (p.kitty_warn) 2 else if (p.show_fps) 1 else 0;
@@ -648,4 +650,66 @@ test "rasterizeDiscRgba produces transparent corners and spindle hole" {
     // Mid-radius pixel (48, 32) on disc body must be opaque
     const body_o = (32 * side + 48) * 4;
     try std.testing.expectEqual(@as(u8, 255), rgba[body_o + 3]);
+}
+
+test "render aligns Kitty disc with circular Braille ring without overlap" {
+    const alloc = std.testing.allocator;
+    var s = Screen.init(alloc);
+    defer s.deinit();
+    try s.resize(120, 40);
+
+    var r = Renderer{ .alloc = alloc };
+    defer r.deinit();
+    r.setImage(try art.placeholder(alloc, 77));
+
+    var enc = kitty.Encoder{ .alloc = alloc, .mode = .direct };
+    defer enc.deinit();
+    var kout: std.ArrayList(u8) = .empty;
+    defer kout.deinit(alloc);
+
+    const bars = [_]f32{0.6} ** 32;
+    const snap = cliamp.Snapshot{};
+    r.render(&s, .{
+        .aspect = 2.0,
+        .angle = 0.2,
+        .dt = 0.016,
+        .left = &bars,
+        .right = &bars,
+        .snap = &snap,
+        .position = 12,
+        .sheen = true,
+        .bass_top = false,
+        .show_fps = true,
+        .show_help = true,
+        .fps = 60.0,
+        .bg_mode = .tint,
+        .cava_ok = true,
+        .kitty_enc = &enc,
+        .kitty_out = &kout,
+        .force_redraw = true,
+    });
+
+    try std.testing.expect(r.disc_active);
+    try std.testing.expect(kout.items.len > 0);
+    // Disc placement box is centered horizontally and vertically in vis_rows (36)
+    try std.testing.expectEqual((120 - r.last_disc_cols) / 2, r.last_col0);
+    try std.testing.expectEqual((36 - r.last_disc_rows) / 2, r.last_row0);
+
+    // No non-space characters inside the disc circle
+    const cx = @as(f32, @floatFromInt(r.last_col0)) + @as(f32, @floatFromInt(r.last_disc_cols)) * 0.5;
+    const cy = (@as(f32, @floatFromInt(r.last_row0)) + @as(f32, @floatFromInt(r.last_disc_rows)) * 0.5) * 2.0;
+    const rd = @min(@as(f32, @floatFromInt(r.last_disc_cols)), @as(f32, @floatFromInt(r.last_disc_rows)) * 2.0) * 0.5;
+    var braille_count: usize = 0;
+    for (0..36) |row| {
+        for (0..120) |col| {
+            const cp = s.at(col, row).cp;
+            if (cp >= 0x2800 and cp <= 0x28FF) braille_count += 1;
+            const dx = @as(f32, @floatFromInt(col)) + 0.5 - cx;
+            const dy = (@as(f32, @floatFromInt(row)) + 0.5) * 2.0 - cy;
+            if (@sqrt(dx * dx + dy * dy) < rd) {
+                try std.testing.expectEqual(@as(u21, ' '), cp);
+            }
+        }
+    }
+    try std.testing.expect(braille_count > 40);
 }

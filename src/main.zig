@@ -244,8 +244,10 @@ pub fn main() !void {
         _ = cava.poll();
         const nb = cava.per_channel;
         for (0..nb) |b| {
-            left[b] = cava.left[b];
-            right[b] = cava.right[b];
+            const tl = cava.left[b];
+            const tr = cava.right[b];
+            left[b] += (tl - left[b]) * (if (tl > left[b]) @min(1.0, dt * 32.0) else @min(1.0, dt * 11.0));
+            right[b] += (tr - right[b]) * (if (tr > right[b]) @min(1.0, dt * 32.0) else @min(1.0, dt * 11.0));
         }
         const snap = client.get();
         var pos = snap.position;
