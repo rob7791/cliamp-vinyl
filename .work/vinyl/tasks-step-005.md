@@ -16,16 +16,18 @@ Aggiungere installazione in ~/.local/bin/vinyl, eseguire test end-to-end (60+ FP
   - mode: integrated
   - mode_reason: Condivide la codebase Zig in src/ o esegue verifica integrata
   - result: Aggiunto step zig build install-local in build.zig; installato e verificato ~/.local/bin/vinyl --help
-- [ ] s5-e2e | Eseguire test end-to-end a 60+ FPS (daemon auto-start/attach, pausa/inerzia, cambio brano, resize, cleanup)
+- [x] s5-e2e | Eseguire test end-to-end a 60+ FPS (daemon auto-start/attach, pausa/inerzia, cambio brano, resize, cleanup)
   - tags: verify, perf
   - deps: s5-install
   - mode: integrated
   - mode_reason: Condivide la codebase Zig in src/ o esegue verifica integrata
+  - result: E2E PTY+Kitty+Braille verificato: 55.7-60.0 fps direct (30.6 MB/s) e 60.0 fps file (0.13 MB/s), resize SIGWINCH 160x50->140x44, pausa space, auto-start/stop cliamp --daemon, cleanup Kitty a=d,d=A e /tmp/vinyl-kitty-*; ispezionate screenshot PNG composite
 - [ ] s5-readme | Scrivere README.md con installazione, setup plugin cliamp, opzioni CLI e scorciatoie
   - tags: docs
   - deps: s5-e2e
   - mode: isolated
   - mode_reason: Scrive solo README.md a fine implementazione
+  - claimed_by: sub-docs
 
 ## Completion criteria
 
