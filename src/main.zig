@@ -19,7 +19,7 @@ const usage =
     \\Se cliamp è già in esecuzione (TUI o demone) vinyl si collega a quello.
     \\
     \\Opzioni:
-    \\  --fps N             frame al secondo (default 60, max 240)
+    \\  --fps N             frame al secondo (default: auto da monitor o 60, max 240)
     \\  --rpm F             velocità manuale disco in RPM (default: auto da BPM o 28)
     \\  --bars N            barre per canale (default 48)
     \\  --aspect F          rapporto altezza/larghezza cella (default: auto, o 2.1)
@@ -39,7 +39,7 @@ const usage =
 const bridge_lua = @embedFile("vinyl-art-bridge.lua");
 
 const Opts = struct {
-    fps: u32 = 60,
+    fps: ?u32 = null,
     rpm: ?f32 = null,
     bars: usize = 48,
     aspect: ?f32 = null,
@@ -158,7 +158,9 @@ pub fn main() !void {
     try loader.start();
     defer loader.stop();
 
-    var cava = Cava.start(gpa, opts.bars, opts.fps, opts.source);
+    const target_fps: u32 = opts.fps orelse term.detectRefreshRate(gpa);
+
+    var cava = Cava.start(gpa, opts.bars, target_fps, opts.source);
     defer cava.stop();
 
     var renderer = render.Renderer{ .alloc = gpa };
@@ -181,7 +183,7 @@ pub fn main() !void {
     defer term.leave();
 
     // --- main loop -----------------------------------------------------------
-    const frame_ns: i128 = @divTrunc(std.time.ns_per_s, opts.fps);
+    const frame_ns: i128 = @divTrunc(std.time.ns_per_s, target_fps);
     var next_frame = std.time.nanoTimestamp();
     var last = next_frame;
     const default_rpm: f32 = 28.0;

@@ -77,3 +77,84 @@ pub fn writeAll(bytes: []const u8) void {
 pub fn readInput(buf: []u8) usize {
     return posix.read(posix.STDIN_FILENO, buf) catch 0;
 }
+
+/// Detects the active monitor refresh rate (Hz) on Linux (X11/XWayland/Wayland),
+/// falling back to 60 if unavailable.
+pub fn detectRefreshRate(alloc: std.mem.Allocator) u32 {
+    if (runAndParse(alloc, &.{ "xrandr", "--current" }, parseXrandrHz)) |hz| return hz;
+    if (runAndParse(alloc, &.{ "hyprctl", "monitors" }, parseAtHz)) |hz| return hz;
+    if (runAndParse(alloc, &.{ "wlr-randr" }, parseWlrRandrHz)) |hz| return hz;
+    return 60;
+}
+
+fn runAndParse(alloc: std.mem.Allocator, argv: []const []const u8, parser: fn ([]const u8) ?u32) ?u32 {
+    const r = std.process.Child.run(.{
+        .allocator = alloc,
+        .argv = argv,
+        .max_output_bytes = 256 * 1024,
+    }) catch return null;
+    defer alloc.free(r.stdout);
+    defer alloc.free(r.stderr);
+    if (r.term != .Exited or r.term.Exited != 0) return null;
+    return parser(r.stdout);
+}
+
+fn parseXrandrHz(out: []const u8) ?u32 {
+    var best: u32 = 0;
+    var it = std.mem.tokenizeAny(u8, out, " \t\r\n");
+    while (it.next()) |tok| {
+        const star = std.mem.indexOfScalar(u8, tok, '*') orelse continue;
+        if (star == 0) continue;
+        const val = std.fmt.parseFloat(f32, tok[0..star]) catch continue;
+        if (val >= 24.0 and val <= 360.0) {
+            const hz: u32 = @intFromFloat(@round(val));
+            if (hz > best) best = hz;
+        }
+    }
+    if (best == 0) return null;
+    return std.math.clamp(best, 30, 240);
+}
+
+fn parseAtHz(out: []const u8) ?u32 {
+    var best: u32 = 0;
+    var i: usize = 0;
+    while (std.mem.indexOfPos(u8, out, i, "@")) |at| {
+        i = at + 1;
+        var end = i;
+        while (end < out.len and ((out[end] >= '0' and out[end] <= '9') or out[end] == '.')) : (end += 1) {}
+        if (end == i) continue;
+        const val = std.fmt.parseFloat(f32, out[i..end]) catch continue;
+        if (val >= 24.0 and val <= 360.0) {
+            const hz: u32 = @intFromFloat(@round(val));
+            if (hz > best) best = hz;
+        }
+    }
+    if (best == 0) return null;
+    return std.math.clamp(best, 30, 240);
+}
+
+fn parseWlrRandrHz(out: []const u8) ?u32 {
+    var best: u32 = 0;
+    var lines = std.mem.splitScalar(u8, out, '\n');
+    while (lines.next()) |line| {
+        if (std.mem.indexOf(u8, line, "current") == null) continue;
+        const hz_pos = std.mem.indexOf(u8, line, " Hz") orelse continue;
+        var start = hz_pos;
+        while (start > 0 and ((line[start - 1] >= '0' and line[start - 1] <= '9') or line[start - 1] == '.')) : (start -= 1) {}
+        if (start == hz_pos) continue;
+        const val = std.fmt.parseFloat(f32, line[start..hz_pos]) catch continue;
+        if (val >= 24.0 and val <= 360.0) {
+            const hz: u32 = @intFromFloat(@round(val));
+            if (hz > best) best = hz;
+        }
+    }
+    if (best == 0) return null;
+    return std.math.clamp(best, 30, 240);
+}
+
+test "refresh rate parsers extract active Hz" {
+    try std.testing.expectEqual(@as(?u32, 120), parseXrandrHz("DP-2 connected\n   3840x2400    119.98*+  60.00\n"));
+    try std.testing.expectEqual(@as(?u32, 144), parseAtHz("Monitor DP-1:\n\t2560x1440@143.99800 at 0x0\n"));
+    try std.testing.expectEqual(@as(?u32, 120), parseWlrRandrHz("  2880x1800 px, 120.000000 Hz (preferred, current)\n"));
+    try std.testing.expectEqual(@as(?u32, null), parseXrandrHz("no modes here\n"));
+}

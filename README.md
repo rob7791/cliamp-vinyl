@@ -94,7 +94,7 @@ Tutti gli argomenti non riconosciuti da `vinyl` vengono inoltrati direttamente a
 
 | Opzione | Descrizione |
 | --- | --- |
-| `--fps N` | Frame al secondo (intervallo `5`–`240`, default `60`) |
+| `--fps N` | Frame al secondo (`5`–`240`; se omesso, rilevato automaticamente dal refresh rate del monitor con fallback a `60`) |
 | `--rpm F` | Velocità manuale iniziale del disco in RPM (`0`–`200`; se omesso, `vinyl` adatta automaticamente gli RPM ai BPM della traccia con fallback a `28` RPM) |
 | `--bars N` | Numero di barre per canale per `cava` (intervallo `8`–`128`, default `48`) |
 | `--aspect F` | Rapporto altezza/larghezza delle celle (intervallo `1.0`–`4.0`; default rilevamento automatico o `2.1`) |
