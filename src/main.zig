@@ -189,6 +189,7 @@ pub fn main() !void {
     var rpm: f32 = opts.rpm;
     var rpm_hud_timer: f32 = 0;
     var peak_mode: render.PeakMode = .path;
+    var glow = true;
     var hud_msg: []const u8 = "";
     var hud_timer: f32 = 0;
     const rpm_presets = [_]f32{ 33.333, 45.0, 78.0, 0.0, 16.666 };
@@ -274,6 +275,11 @@ pub fn main() !void {
                     hud_msg = if (peak_mode == .path) " path (1:1) " else " peak ";
                     hud_timer = 2.0;
                 },
+                'g' => {
+                    glow = !glow;
+                    hud_msg = if (glow) " glow on " else " glow off ";
+                    hud_timer = 2.0;
+                },
                 '?', 'h' => show_help = !show_help,
                 else => {},
             }
@@ -335,6 +341,7 @@ pub fn main() !void {
             .rpm = rpm,
             .show_rpm = rpm_hud_timer > 0,
             .peak_mode = peak_mode,
+            .glow = glow,
             .hud_msg = if (hud_timer > 0) hud_msg else "",
             .bg_mode = bg_mode,
             .cava_ok = cava.ok,

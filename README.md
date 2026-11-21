@@ -123,6 +123,7 @@ Tutti gli argomenti non riconosciuti da `vinyl` vengono inoltrati direttamente a
 | `v` | Cicla i preset vinile (`33.3`, `45`, `78`, `0`, `16.7` RPM) |
 | `0` | Ripristina la velocità predefinita (`33.3` RPM) |
 | `w` | Alterna tra le 3 curve ellittiche 1:1 (`skyblue` basse, `limegreen` medie, `crimson` alte, con riempimento a scalare) e i classici `peak` con decay |
+| `g` | Attiva/disattiva il bagliore sidechain sui colpi di cassa (100–300 Hz) attorno al disco |
 | `l` | Attiva/disattiva i riflessi del vinile |
 | `b` | Alterna lo sfondo tra tinta derivata dalla copertina e nero |
 | `i` | Inverte l'orientamento delle frequenze (bassi in alto / in basso) |

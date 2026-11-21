@@ -97,6 +97,7 @@ pub const Params = struct {
     rpm: f32 = 33.333,
     show_rpm: bool = false,
     peak_mode: PeakMode = .path,
+    glow: bool = true,
     hud_msg: []const u8 = "",
     bg_mode: BgMode,
     cava_ok: bool,
@@ -118,6 +119,8 @@ pub const Renderer = struct {
     path_mid: [ANG]f32 = [_]f32{0} ** ANG,
     path_high: [ANG]f32 = [_]f32{0} ** ANG,
     peak: [ANG]f32 = [_]f32{0} ** ANG,
+    kick_avg: f32 = 0,
+    kick_glow: f32 = 0,
     tex_size_for: usize = 0,
     img_gen: u64 = 0,
 
@@ -194,8 +197,15 @@ pub const Renderer = struct {
         var high_l: f32 = 0;
         var high_r: f32 = 0;
         var high_w: f32 = 0;
+        // Kick drum band: 100Hz–300Hz on cava's 40Hz–16000Hz log scale => u in [0.153, 0.336]
+        var kick_sum: f32 = 0;
+        var kick_cnt: f32 = 0;
         for (0..n) |i| {
             const u = if (n > 1) @as(f32, @floatFromInt(i)) / nf else 0.0;
+            if (u >= 0.14 and u <= 0.35) {
+                kick_sum += 0.5 * (raw_l[i] + raw_r[i]);
+                kick_cnt += 1.0;
+            }
             const dl = (u - 0.12) / 0.20;
             const dm = (u - 0.50) / 0.22;
             const dh = (u - 0.86) / 0.20;
@@ -224,6 +234,20 @@ pub const Renderer = struct {
             high_l /= high_w;
             high_r /= high_w;
         }
+
+        // Kick sidechain detector: stronger glow for louder (dB) AND more sudden (transient flux) hits
+        const kick_e: f32 = if (kick_cnt > 0) std.math.clamp(kick_sum / kick_cnt, 0, 1) else 0;
+        const flux: f32 = @max(0.0, kick_e - self.kick_avg);
+        self.kick_avg += (kick_e - self.kick_avg) * @min(1.0, p.dt * 5.5);
+        const punch: f32 = std.math.clamp(std.math.pow(f32, kick_e, 1.15) * (0.30 + 3.0 * flux), 0, 1.0);
+        if (punch > self.kick_glow) {
+            // Fast sidechain attack
+            self.kick_glow += (punch - self.kick_glow) * @min(1.0, p.dt * 48.0);
+        } else {
+            // Smooth pumping release (~150ms)
+            self.kick_glow *= @exp(-p.dt * 6.5);
+        }
+        self.kick_glow = std.math.clamp(self.kick_glow, 0, 1.0);
 
         for (0..ANG) |a| {
             const th = (@as(f32, @floatFromInt(a)) + 0.5) / ANG * TAU;
@@ -322,6 +346,9 @@ pub const Renderer = struct {
             const rh = @max(rd * 0.048, 0.75);
 
             self.updateRing(&p);
+            if (p.glow and self.kick_glow > 0.004) {
+                self.drawGlow(s, cx, cy, rd, rmax, vis_rows, k, pal.c1, pal.c2, bgf);
+            }
             self.drawRing(s, &p, cx, cy, rd, r0, ring_h, ring_min, vis_rows, pal.c1, pal.c2, bgf);
 
             if (p.kitty_enc) |enc| {
@@ -450,7 +477,55 @@ pub const Renderer = struct {
         }
     }
 
+    fn drawGlow(
+        self: *const Renderer,
+        s: *Screen,
+        cx: f32,
+        cy: f32,
+        rd: f32,
+        rmax: f32,
+        vis_rows: usize,
+        k: f32,
+        c1: [3]f32,
+        c2: [3]f32,
+        bgf: [3]f32,
+    ) void {
+        const glow_col = mix3(mix3(c1, c2, 0.5), .{ 255, 255, 255 }, 0.38);
+        const spread = @max(rmax * 0.85, rd * 1.35);
+        const inv_spread = 1.0 / spread;
+        const max_d = rd + spread * 2.2;
+        const max_d2 = max_d * max_d;
+        const inner_start = rd * 0.86;
+        const intensity = self.kick_glow * 0.56;
+
+        for (0..vis_rows) |r| {
+            const dy = (@as(f32, @floatFromInt(r)) + 0.5) * k - cy;
+            const dy2 = dy * dy;
+            if (dy2 > max_d2) continue;
+            for (0..s.cols) |c| {
+                const dx = @as(f32, @floatFromInt(c)) + 0.5 - cx;
+                const d2 = dx * dx + dy2;
+                if (d2 > max_d2) continue;
+                const d = @sqrt(d2);
+                if (d < inner_start) continue;
+
+                const rim_in = smoothstep(inner_start, rd * 1.02, d);
+                const dist_out = @max(0.0, d - rd * 0.96);
+                const t = dist_out * inv_spread;
+                const falloff = @exp(-std.math.pow(f32, t, 1.55));
+                const amt = std.math.clamp(intensity * rim_in * falloff, 0, 0.82);
+                if (amt <= 0.002) continue;
+
+                const col = toRgb(mix3(bgf, glow_col, amt));
+                const cell = s.at(c, r);
+                cell.bg = col;
+                cell.fg = col;
+            }
+        }
+    }
+
     fn drawRing(self: *Renderer, s: *Screen, p: *const Params, cx: f32, cy: f32, rd: f32, r0: f32, ring_h: f32, ring_min: f32, vis_rows: usize, c1: [3]f32, c2: [3]f32, bgf: [3]f32) void {
+        _ = bgf;
         const k = p.aspect;
         const outer_max = r0 + ring_min + ring_h + 0.5;
         const r_lo: usize = @intFromFloat(@max(0, @floor((cy - outer_max) / k)));
@@ -555,7 +630,6 @@ pub const Renderer = struct {
                     1 => crimson,
                     else => toRgb(.{ acc[0] / lit, acc[1] / lit, acc[2] / lit }),
                 };
-                cell.bg = toRgb(bgf);
             }
         }
     }
@@ -612,6 +686,7 @@ pub const Renderer = struct {
                 " [ / ]   spin ∓5 RPM ({/} ∓1)",
                 " v / 0   preset RPM / reset",
                 " w       path 1:1 / peak",
+                " g       bagliore cassa on/off",
                 " l       riflessi on/off",
                 " b       sfondo tinta/nero",
                 " i       inverti bassi su/giù",
@@ -935,4 +1010,74 @@ test "PeakMode.path draws skyblue 1:1 path from raw spectrum without smoothing" 
     });
     try std.testing.expect(r.path_low[0] > r.path_low[ANG / 2] * 2.0);
     try std.testing.expect(r.path_high[ANG / 2] > r.path_high[0] * 2.0);
+}
+
+test "kick sidechain glow reacts stronger to sudden 100-300Hz hits and radiates past disc" {
+    const alloc = std.testing.allocator;
+    var r = Renderer{ .alloc = alloc };
+    defer r.deinit();
+    r.setImage(try art.placeholder(alloc, 11));
+
+    var s = Screen.init(alloc);
+    defer s.deinit();
+    try s.resize(120, 40);
+
+    var snap = cliamp.Snapshot{ .connected = true, .state = .playing };
+    const zero_bars = [_]f32{0.0} ** 48;
+    var kick_bars = [_]f32{0.0} ** 48;
+    // 100-300Hz maps to u in [0.14, 0.35] => indices ~7..16 for 48 bars
+    for (7..17) |i| kick_bars[i] = 0.95;
+
+    // Sudden kick hit from silence
+    r.render(&s, .{
+        .aspect = 2.0,
+        .angle = 0.0,
+        .dt = 1.0 / 60.0,
+        .left = &zero_bars,
+        .right = &zero_bars,
+        .raw_left = &kick_bars,
+        .raw_right = &kick_bars,
+        .snap = &snap,
+        .position = 0,
+        .sheen = false,
+        .bass_top = false,
+        .show_fps = false,
+        .show_help = false,
+        .fps = 60.0,
+        .peak_mode = .path,
+        .glow = true,
+        .bg_mode = .black,
+        .cava_ok = true,
+    });
+    const sudden_glow = r.kick_glow;
+    try std.testing.expect(sudden_glow > 0.3);
+
+    // Cells well outside the disc should be brightened above black (6,6,8)
+    const far_cell = s.at(15, 18);
+    try std.testing.expect(far_cell.bg.r > 12 or far_cell.bg.g > 12 or far_cell.bg.b > 12);
+
+    // Sustained kick of the same loudness settles to a lower glow than the initial sudden hit
+    for (0..60) |_| {
+        r.render(&s, .{
+            .aspect = 2.0,
+            .angle = 0.0,
+            .dt = 1.0 / 60.0,
+            .left = &zero_bars,
+            .right = &zero_bars,
+            .raw_left = &kick_bars,
+            .raw_right = &kick_bars,
+            .snap = &snap,
+            .position = 0,
+            .sheen = false,
+            .bass_top = false,
+            .show_fps = false,
+            .show_help = false,
+            .fps = 60.0,
+            .peak_mode = .path,
+            .glow = true,
+            .bg_mode = .black,
+            .cava_ok = true,
+        });
+    }
+    try std.testing.expect(r.kick_glow < sudden_glow);
 }
