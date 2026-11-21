@@ -526,13 +526,25 @@ pub const Renderer = struct {
         c2: [3]f32,
         bgf: [3]f32,
     ) void {
-        const glow_col = mix3(mix3(c1, c2, 0.5), .{ 255, 255, 255 }, 0.38);
+        _ = c2;
+        // Pure 100%-saturated hue extracted from the cover's dominant color (no white washout)
+        const c_mn = @min(c1[0], @min(c1[1], c1[2]));
+        const c_mx = @max(c1[0], @max(c1[1], c1[2]));
+        const pure: [3]f32 = if (c_mx - c_mn > 2.0) blk: {
+            const inv = 1.0 / (c_mx - c_mn);
+            break :blk .{ (c1[0] - c_mn) * inv, (c1[1] - c_mn) * inv, (c1[2] - c_mn) * inv };
+        } else .{ 0.45, 0.55, 1.0 }; // fallback hue for greyscale covers
+
+        const bg_mx = @max(bgf[0], @max(bgf[1], bgf[2]));
+        const target_v = std.math.clamp(bg_mx * 3.2, 64.0, 120.0);
+        const sat_col = [3]f32{ pure[0] * target_v, pure[1] * target_v, pure[2] * target_v };
+
         const spread = @max(rmax * 0.85, rd * 1.35);
         const inv_spread = 1.0 / spread;
         const max_d = rd + spread * 2.2;
         const max_d2 = max_d * max_d;
         const inner_start = rd * 0.86;
-        const intensity = self.kick_glow * 0.56;
+        const intensity = self.kick_glow * 0.82;
 
         for (0..vis_rows) |r| {
             const dy = (@as(f32, @floatFromInt(r)) + 0.5) * k - cy;
@@ -549,10 +561,10 @@ pub const Renderer = struct {
                 const dist_out = @max(0.0, d - rd * 0.96);
                 const t = dist_out * inv_spread;
                 const falloff = @exp(-std.math.pow(f32, t, 1.55));
-                const amt = std.math.clamp(intensity * rim_in * falloff, 0, 0.82);
+                const amt = std.math.clamp(intensity * rim_in * falloff, 0, 0.92);
                 if (amt <= 0.002) continue;
 
-                const col = toRgb(mix3(bgf, glow_col, amt));
+                const col = toRgb(mix3(bgf, sat_col, amt));
                 const cell = s.at(c, r);
                 cell.bg = col;
                 cell.fg = col;
