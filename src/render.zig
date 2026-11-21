@@ -114,7 +114,9 @@ pub const Renderer = struct {
     old_tex: Texture = .{},
     fade: f32 = 1.0,
     amp: [ANG]f32 = [_]f32{0} ** ANG,
-    raw_amp: [ANG]f32 = [_]f32{0} ** ANG,
+    path_low: [ANG]f32 = [_]f32{0} ** ANG,
+    path_mid: [ANG]f32 = [_]f32{0} ** ANG,
+    path_high: [ANG]f32 = [_]f32{0} ** ANG,
     peak: [ANG]f32 = [_]f32{0} ** ANG,
     tex_size_for: usize = 0,
     img_gen: u64 = 0,
@@ -181,11 +183,54 @@ pub const Renderer = struct {
         const raw_l = if (p.raw_left.len == n) p.raw_left else p.left;
         const raw_r = if (p.raw_right.len == n) p.raw_right else p.right;
         const decay = p.dt * 0.55;
+
+        // 1:1 raw band energies (low / mid / high) per channel, zero temporal smoothing
+        var low_l: f32 = 0;
+        var low_r: f32 = 0;
+        var low_w: f32 = 0;
+        var mid_l: f32 = 0;
+        var mid_r: f32 = 0;
+        var mid_w: f32 = 0;
+        var high_l: f32 = 0;
+        var high_r: f32 = 0;
+        var high_w: f32 = 0;
+        for (0..n) |i| {
+            const u = if (n > 1) @as(f32, @floatFromInt(i)) / nf else 0.0;
+            const dl = (u - 0.12) / 0.20;
+            const dm = (u - 0.50) / 0.22;
+            const dh = (u - 0.86) / 0.20;
+            const wl = @exp(-(dl * dl));
+            const wm = @exp(-(dm * dm));
+            const wh = @exp(-(dh * dh));
+            low_l += raw_l[i] * wl;
+            low_r += raw_r[i] * wl;
+            low_w += wl;
+            mid_l += raw_l[i] * wm;
+            mid_r += raw_r[i] * wm;
+            mid_w += wm;
+            high_l += raw_l[i] * wh;
+            high_r += raw_r[i] * wh;
+            high_w += wh;
+        }
+        if (low_w > 0) {
+            low_l /= low_w;
+            low_r /= low_w;
+        }
+        if (mid_w > 0) {
+            mid_l /= mid_w;
+            mid_r /= mid_w;
+        }
+        if (high_w > 0) {
+            high_l /= high_w;
+            high_r /= high_w;
+        }
+
         for (0..ANG) |a| {
             const th = (@as(f32, @floatFromInt(a)) + 0.5) / ANG * TAU;
             const right_side = th < std.math.pi;
             const t = if (right_side) th / std.math.pi else (TAU - th) / std.math.pi; // 0 top, 1 bottom
-            const fpos = (if (p.bass_top) t else 1.0 - t) * nf;
+            const u = if (p.bass_top) t else 1.0 - t; // 0 = bass pole, 0.5 = mid sides, 1 = high pole
+            const fpos = u * nf;
             const vr = catmull(p.right, fpos);
             const vl = catmull(p.left, fpos);
             const s = smoothstep(0, 0.12, @min(t, 1 - t));
@@ -195,9 +240,24 @@ pub const Renderer = struct {
             self.amp[a] = v;
             self.peak[a] = @max(v, self.peak[a] - decay);
 
-            // Direct 1:1 piecewise-linear sample of raw unfiltered frequencies (no smoothing, no delay)
-            const rv = if (right_side) linSample(raw_r, fpos) else linSample(raw_l, fpos);
-            self.raw_amp[a] = std.math.clamp(rv, 0, 1);
+            // Slightly deformed elliptical envelopes bulging toward each band's reference frequency
+            const el = if (right_side) low_r * own + low_l * (1 - own) else low_l * own + low_r * (1 - own);
+            const em = if (right_side) mid_r * own + mid_l * (1 - own) else mid_l * own + mid_r * (1 - own);
+            const eh = if (right_side) high_r * own + high_l * (1 - own) else high_l * own + high_r * (1 - own);
+
+            const c_low = @max(0.0, @cos(u * std.math.pi * 0.5));
+            const s_mid = @max(0.0, @sin(u * std.math.pi));
+            const s_high = @max(0.0, @sin(u * std.math.pi * 0.5));
+            const env_low = 0.25 + 0.75 * std.math.pow(f32, c_low, 1.4);
+            const env_mid = 0.25 + 0.75 * std.math.pow(f32, s_mid, 1.4);
+            const env_high = 0.25 + 0.75 * std.math.pow(f32, s_high, 1.4);
+
+            const raw_here = if (right_side) linSample(raw_r, fpos) else linSample(raw_l, fpos);
+            const deform = 0.88 + 0.22 * raw_here;
+
+            self.path_low[a] = std.math.clamp(el * env_low * deform * 1.15, 0, 1.0);
+            self.path_mid[a] = std.math.clamp(em * env_mid * deform * 1.15, 0, 1.0);
+            self.path_high[a] = std.math.clamp(eh * env_high * deform * 1.15, 0, 1.0);
         }
     }
 
@@ -393,6 +453,8 @@ pub const Renderer = struct {
         const path_w = k * 0.14;
         const white = [3]f32{ 255, 255, 255 };
         const skyblue = Rgb{ .r = 135, .g = 206, .b = 235 };
+        const limegreen = Rgb{ .r = 50, .g = 205, .b = 50 };
+        const crimson = Rgb{ .r = 220, .g = 20, .b = 60 };
 
         var r = r_lo;
         while (r < r_hi) : (r += 1) {
@@ -407,7 +469,8 @@ pub const Renderer = struct {
                 var bits: u8 = 0;
                 var acc = [3]f32{ 0, 0, 0 };
                 var lit: f32 = 0;
-                var has_path = false;
+                // Layer priority per cell: 3 = bass (skyblue), 2 = mid (limegreen), 1 = high (crimson), 0 = band
+                var cell_layer: u8 = 0;
                 for (0..4) |j| {
                     for (0..2) |i| {
                         const dx = @as(f32, @floatFromInt(c)) + 0.25 + 0.5 * @as(f32, @floatFromInt(i)) - cx;
@@ -420,26 +483,40 @@ pub const Renderer = struct {
                         const v = self.amp[idx];
                         const top = r0 + ring_min + v * ring_h;
 
-                        var on_path = false;
+                        var hit_layer: u8 = 0;
                         if (p.peak_mode == .path) {
-                            const prev_idx: usize = if (idx == 0) ANG - 1 else idx - 1;
-                            const next_idx: usize = if (idx + 1 >= ANG) 0 else idx + 1;
-                            const r_cur = r0 + ring_min + self.raw_amp[idx] * ring_h;
-                            const r_prev = r0 + ring_min + self.raw_amp[prev_idx] * ring_h;
-                            const r_next = r0 + ring_min + self.raw_amp[next_idx] * ring_h;
-                            const mid_prev = (r_cur + r_prev) * 0.5;
-                            const mid_next = (r_cur + r_next) * 0.5;
-                            const seg_lo = @min(r_cur, @min(mid_prev, mid_next)) - path_w;
-                            const seg_hi = @max(r_cur, @max(mid_prev, mid_next)) + path_w;
-                            if ((rho >= seg_lo and rho <= seg_hi) or (rho > top and rho <= r_cur)) {
-                                on_path = true;
-                                has_path = true;
+                            const r_low = r0 + ring_min + self.path_low[idx] * ring_h;
+                            const r_mid = r0 + ring_min + self.path_mid[idx] * ring_h;
+                            const r_high = r0 + ring_min + self.path_high[idx] * ring_h;
+                            const has_low = self.path_low[idx] > 0.01;
+                            const has_mid = self.path_mid[idx] > 0.01;
+                            const has_high = self.path_high[idx] > 0.01;
+
+                            if (rho > top) {
+                                // Fill gaps in priority order: bass (skyblue) > mids (limegreen) > highs (crimson)
+                                if (has_low and rho <= r_low + path_w) {
+                                    hit_layer = 3;
+                                } else if (has_mid and rho <= r_mid + path_w) {
+                                    hit_layer = 2;
+                                } else if (has_high and rho <= r_high + path_w) {
+                                    hit_layer = 1;
+                                }
+                            } else {
+                                // Inside smoothed band: overlay contour lines in priority order
+                                if (has_low and @abs(rho - r_low) <= path_w) {
+                                    hit_layer = 3;
+                                } else if (has_mid and @abs(rho - r_mid) <= path_w) {
+                                    hit_layer = 2;
+                                } else if (has_high and @abs(rho - r_high) <= path_w) {
+                                    hit_layer = 1;
+                                }
                             }
                         }
 
                         var col: [3]f32 = undefined;
-                        if (on_path) {
+                        if (hit_layer > 0) {
                             bits |= dot_bits[j][i];
+                            cell_layer = @max(cell_layer, hit_layer);
                             continue;
                         } else if (rho <= top) {
                             const q = std.math.clamp((rho - r0) / ring_h, 0, 1);
@@ -463,7 +540,12 @@ pub const Renderer = struct {
                 if (bits == 0) continue;
                 const cell = s.at(c, r);
                 cell.cp = 0x2800 + @as(u21, bits);
-                cell.fg = if (has_path) skyblue else toRgb(.{ acc[0] / lit, acc[1] / lit, acc[2] / lit });
+                cell.fg = switch (cell_layer) {
+                    3 => skyblue,
+                    2 => limegreen,
+                    1 => crimson,
+                    else => toRgb(.{ acc[0] / lit, acc[1] / lit, acc[2] / lit }),
+                };
                 cell.bg = toRgb(bgf);
             }
         }
@@ -803,15 +885,45 @@ test "PeakMode.path draws skyblue 1:1 path from raw spectrum without smoothing" 
     });
 
     var skyblue_cells: usize = 0;
+    var lime_cells: usize = 0;
+    var crimson_cells: usize = 0;
     for (0..36) |row| {
         for (0..120) |col| {
             const cell = s.at(col, row);
-            if (cell.cp >= 0x2800 and cell.cp <= 0x28FF and
-                cell.fg.r == 135 and cell.fg.g == 206 and cell.fg.b == 235)
-            {
-                skyblue_cells += 1;
+            if (cell.cp >= 0x2800 and cell.cp <= 0x28FF) {
+                if (cell.fg.r == 135 and cell.fg.g == 206 and cell.fg.b == 235) skyblue_cells += 1;
+                if (cell.fg.r == 50 and cell.fg.g == 205 and cell.fg.b == 50) lime_cells += 1;
+                if (cell.fg.r == 220 and cell.fg.g == 20 and cell.fg.b == 60) crimson_cells += 1;
             }
         }
     }
-    try std.testing.expect(skyblue_cells > 30);
+    try std.testing.expect(skyblue_cells > 20);
+    try std.testing.expect(lime_cells > 10);
+    try std.testing.expect(crimson_cells > 10);
+    // bass_top = false => bass (path_low) is fatter at bottom (ANG/2) than top (0)
+    try std.testing.expect(r.path_low[ANG / 2] > r.path_low[0] * 2.0);
+    try std.testing.expect(r.path_high[0] > r.path_high[ANG / 2] * 2.0);
+
+    // Inverting bass_top flips the reference poles for low and high ellipses
+    r.render(&s, .{
+        .aspect = 2.0,
+        .angle = 0.0,
+        .dt = 1.0 / 60.0,
+        .left = &zero_bars,
+        .right = &zero_bars,
+        .raw_left = &raw_bars,
+        .raw_right = &raw_bars,
+        .snap = &snap,
+        .position = 0,
+        .sheen = false,
+        .bass_top = true,
+        .show_fps = false,
+        .show_help = false,
+        .fps = 60.0,
+        .peak_mode = .path,
+        .bg_mode = .black,
+        .cava_ok = true,
+    });
+    try std.testing.expect(r.path_low[0] > r.path_low[ANG / 2] * 2.0);
+    try std.testing.expect(r.path_high[ANG / 2] > r.path_high[0] * 2.0);
 }
