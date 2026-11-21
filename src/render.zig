@@ -431,7 +431,7 @@ pub const Renderer = struct {
                             const mid_next = (r_cur + r_next) * 0.5;
                             const seg_lo = @min(r_cur, @min(mid_prev, mid_next)) - path_w;
                             const seg_hi = @max(r_cur, @max(mid_prev, mid_next)) + path_w;
-                            if (rho >= seg_lo and rho <= seg_hi) {
+                            if ((rho >= seg_lo and rho <= seg_hi) or (rho > top and rho <= r_cur)) {
                                 on_path = true;
                                 has_path = true;
                             }
