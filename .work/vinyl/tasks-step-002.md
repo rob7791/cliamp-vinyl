@@ -16,11 +16,12 @@ Sostituire il rendering half-block del disco in src/render.zig con un renderer R
   - mode: integrated
   - mode_reason: Condivide la codebase Zig in src/ o esegue verifica integrata
   - result: Implementato src/kitty.zig (Mode direct t=d chunked e file t=f ring-buffer 4 slot, isSupported, emitDeleteAll, cleanup); zig test superati (2/2)
-- [ ] s2-disc-rgba | Sostituire il disco half-block con rasterizzazione RGBA circolare ad alta risoluzione (rotazione, buco, AA, riflessi, crossfade)
+- [x] s2-disc-rgba | Sostituire il disco half-block con rasterizzazione RGBA circolare ad alta risoluzione (rotazione, buco, AA, riflessi, crossfade)
   - tags: kitty, render, impl
   - deps: s2-kitty-mod
   - mode: integrated
   - mode_reason: Condivide la codebase Zig in src/ o esegue verifica integrata
+  - result: Sostituito drawDisc half-block con rasterizeDiscRgba RGBA ad alta risoluzione (bordo e buco centrale AA, rotazione, riflessi, micro-solchi, crossfade, dirty tracking); zig test (3/3) e zig build ok
 - [ ] s2-frame-loop | Integrare trasmissione Kitty nel loop 60+ FPS in src/main.zig con synchronized updates senza flicker
   - tags: kitty, perf, impl
   - deps: s2-disc-rgba

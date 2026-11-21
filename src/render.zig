@@ -1,8 +1,9 @@
-//! Frame composition: rotating picture-disc + circular stereo spectrum + info.
+//! Frame composition: high-res Kitty picture-disc + circular stereo Braille spectrum + info.
 const std = @import("std");
 const scr = @import("screen.zig");
 const art = @import("art.zig");
 const cliamp = @import("cliamp.zig");
+const kitty = @import("kitty.zig");
 const Rgb = scr.Rgb;
 const Screen = scr.Screen;
 
@@ -92,6 +93,10 @@ pub const Params = struct {
     fps: f32,
     bg_mode: BgMode,
     cava_ok: bool,
+    kitty_enc: ?*kitty.Encoder = null,
+    kitty_out: ?*std.ArrayList(u8) = null,
+    kitty_warn: bool = false,
+    force_redraw: bool = false,
 };
 
 pub const Renderer = struct {
@@ -104,6 +109,20 @@ pub const Renderer = struct {
     amp: [ANG]f32 = [_]f32{0} ** ANG,
     peak: [ANG]f32 = [_]f32{0} ** ANG,
     tex_size_for: usize = 0,
+    img_gen: u64 = 0,
+
+    // dirty tracking for Kitty disc frame emission
+    disc_active: bool = false,
+    last_col0: usize = 0,
+    last_row0: usize = 0,
+    last_disc_cols: usize = 0,
+    last_disc_rows: usize = 0,
+    last_side: usize = 0,
+    last_aspect: f32 = 0,
+    last_angle: f32 = -1,
+    last_fade: f32 = 1.0,
+    last_img_gen: u64 = 0,
+    last_sheen: bool = false,
 
     pub fn deinit(self: *Renderer) void {
         self.tex.deinit(self.alloc);
@@ -119,10 +138,11 @@ pub const Renderer = struct {
         self.img = img;
         self.fade = if (self.old_img == null) 1.0 else 0.0;
         self.tex_size_for = 0; // force rebuild of the new texture
+        self.img_gen +%= 1;
     }
 
-    fn ensureTextures(self: *Renderer, disc_px: usize) void {
-        const want = std.math.clamp(disc_px, 16, art.SRC);
+    fn ensureTextures(self: *Renderer, want_in: usize) void {
+        const want = std.math.clamp(want_in, 64, art.SRC);
         if (self.tex_size_for == want) return;
         if (self.img) |i| self.tex.build(self.alloc, i, want) catch return;
         if (self.old_img) |i| {
@@ -170,7 +190,11 @@ pub const Renderer = struct {
     pub fn render(self: *Renderer, s: *Screen, p: Params) void {
         if (self.fade < 1.0) self.fade = @min(1.0, self.fade + p.dt / 0.8);
 
-        const pal: Palette = if (self.img != null) self.palette() else .{ .c1 = [3]f32{ 200, 200, 200 }, .c2 = [3]f32{ 255, 255, 255 }, .avg = [3]f32{ 40, 40, 40 } };
+        const pal: Palette = if (self.img != null) self.palette() else .{
+            .c1 = .{ 200, 200, 200 },
+            .c2 = .{ 255, 255, 255 },
+            .avg = .{ 40, 40, 40 },
+        };
         const bgf: [3]f32 = switch (p.bg_mode) {
             .tint => .{ pal.avg[0] * 0.13 + 4, pal.avg[1] * 0.13 + 4, pal.avg[2] * 0.13 + 5 },
             .black => .{ 6, 6, 8 },
@@ -184,91 +208,167 @@ pub const Renderer = struct {
         const vis_rows = rows - info_rows;
         const k = p.aspect;
 
-        // Geometry, in units of one cell width.
-        const cx: f32 = @as(f32, @floatFromInt(cols)) / 2.0;
-        const cy: f32 = @as(f32, @floatFromInt(vis_rows)) * k / 2.0;
-        const rmax = @min(cx, cy) - 0.3;
+        // Cell-aligned disc placement box centered in (0..cols, 0..vis_rows).
+        const cx0: f32 = @as(f32, @floatFromInt(cols)) * 0.5;
+        const cy0: f32 = @as(f32, @floatFromInt(vis_rows)) * k * 0.5;
+        const rmax = @min(cx0, cy0) - 0.3;
         const ring_h = rmax * 0.27;
         const margin = @max(rmax * 0.05, k * 0.8);
-        const rd = rmax - ring_h - margin; // disc radius
-        const r0 = rd + margin; // ring base
-        const rh = @max(rd * 0.045, 0.8); // spindle hole
+        const rd_raw = rmax - ring_h - margin;
         const ring_min: f32 = 0.35;
 
-        if (rd > 2) {
-            self.ensureTextures(@intFromFloat(rd * 4));
+        var disc_col0: usize = 0;
+        var disc_row0: usize = 0;
+        var disc_cols: usize = 0;
+        var disc_rows: usize = 0;
+
+        if (rd_raw > 2.0 and cols >= 4 and vis_rows >= 4) {
+            const half_rows = @max(2, @as(usize, @intFromFloat(@floor(rd_raw / k))));
+            disc_rows = @min(vis_rows, half_rows * 2);
+            const half_cols = @max(2, @as(usize, @intFromFloat(@round(@as(f32, @floatFromInt(disc_rows)) * 0.5 * k))));
+            disc_cols = @min(cols, half_cols * 2);
+            disc_col0 = (cols - disc_cols) / 2;
+            disc_row0 = (vis_rows - disc_rows) / 2;
+
+            const box_w: f32 = @floatFromInt(disc_cols);
+            const box_h: f32 = @as(f32, @floatFromInt(disc_rows)) * k;
+            const cx: f32 = @as(f32, @floatFromInt(disc_col0)) + box_w * 0.5;
+            const cy: f32 = (@as(f32, @floatFromInt(disc_row0)) + @as(f32, @floatFromInt(disc_rows)) * 0.5) * k;
+            const rd = @min(box_w, box_h) * 0.5;
+            const r0 = rd + margin;
+            const rh = @max(rd * 0.048, 0.75);
+
             self.updateRing(&p);
-            self.drawDisc(s, &p, cx, cy, rd, rh, vis_rows, bgf);
             self.drawRing(s, &p, cx, cy, rd, r0, ring_h, ring_min, vis_rows, pal.c1, pal.c2, bgf);
-        }
-        self.drawInfo(s, &p, vis_rows, pal.c1, pal.c2, bg);
-    }
 
-    fn drawDisc(self: *Renderer, s: *Screen, p: *const Params, cx: f32, cy: f32, rd: f32, rh: f32, vis_rows: usize, bgf: [3]f32) void {
-        if (self.img == null or self.tex.size == 0) return;
-        const k = p.aspect;
-        const ca = @cos(p.angle);
-        const sa = @sin(p.angle);
-        const r_lo: usize = @intFromFloat(@max(0, @floor((cy - rd) / k)));
-        const r_hi: usize = @min(vis_rows, @as(usize, @intFromFloat(@ceil((cy + rd) / k))) + 1);
-        const c_lo: usize = @intFromFloat(@max(0, @floor(cx - rd)));
-        const c_hi: usize = @min(s.cols, @as(usize, @intFromFloat(@ceil(cx + rd))) + 1);
-        const use_old = self.fade < 1.0 and self.old_img != null and self.old_tex.size == self.tex.size;
-        const inv_rd = 1.0 / rd;
-        const sub_x = [2]f32{ 0.25, 0.75 };
-        const sub_y = [2]f32{ 0.25, 0.75 };
-
-        var r = r_lo;
-        while (r < r_hi) : (r += 1) {
-            var c = c_lo;
-            while (c < c_hi) : (c += 1) {
-                var halves: [2][3]f32 = undefined;
-                var any = false;
-                inline for (0..2) |h| {
-                    var acc = [3]f32{ 0, 0, 0 };
-                    var cover: f32 = 0;
-                    for (sub_y) |oy| {
-                        for (sub_x) |ox| {
-                            const sx = @as(f32, @floatFromInt(c)) + ox - cx;
-                            const sy = (@as(f32, @floatFromInt(r)) + (@as(f32, @floatFromInt(h)) + oy) * 0.5) * k - cy;
-                            const rho = @sqrt(sx * sx + sy * sy);
-                            if (rho > rd or rho < rh) continue;
-                            const u = (sx * ca + sy * sa) * inv_rd;
-                            const v = (-sx * sa + sy * ca) * inv_rd;
-                            var col = self.tex.sample(u, v);
-                            if (use_old) col = mix3(self.old_tex.sample(u, v), col, self.fade);
-                            // shading: rim, spindle shadow, static sheen
-                            const rn = rho * inv_rd;
-                            var shade: f32 = 1.0;
-                            if (rn > 0.965) shade *= 0.72;
-                            if (rho < rh * 1.8) shade *= 0.55;
-                            col = .{ col[0] * shade, col[1] * shade, col[2] * shade };
-                            if (p.sheen) {
-                                const phi = std.math.atan2(sy, sx);
-                                const cphi = @cos(phi - 0.85);
-                                const c2 = cphi * cphi;
-                                const w = c2 * c2 * c2 * c2 * c2 * c2 * 0.16 * rn;
-                                col = .{ col[0] + (255 - col[0]) * w, col[1] + (255 - col[1]) * w, col[2] + (255 - col[2]) * w };
+            if (p.kitty_enc) |enc| {
+                const side: usize = std.math.clamp(disc_cols * 6, 96, 320) & ~@as(usize, 1);
+                self.ensureTextures(@min(art.SRC, side * 2));
+                if (self.img != null and self.tex.size > 0) {
+                    const dirty = p.force_redraw or !self.disc_active or
+                        self.last_col0 != disc_col0 or self.last_row0 != disc_row0 or
+                        self.last_disc_cols != disc_cols or self.last_disc_rows != disc_rows or
+                        self.last_side != side or @abs(self.last_aspect - k) > 1e-4 or
+                        self.last_img_gen != self.img_gen or self.last_sheen != p.sheen or
+                        self.fade < 1.0 or self.last_fade < 1.0 or
+                        p.angle != self.last_angle;
+                    if (dirty) {
+                        enc.ensureSize(side) catch {};
+                        if (enc.rgba.len == side * side * 4) {
+                            self.rasterizeDiscRgba(enc.rgba, side, box_w, box_h, rd, rh, &p);
+                            if (p.kitty_out) |out| {
+                                enc.emitFrame(out, self.alloc, disc_col0, disc_row0, disc_cols, disc_rows) catch {};
                             }
-                            acc[0] += col[0];
-                            acc[1] += col[1];
-                            acc[2] += col[2];
-                            cover += 1;
+                            self.disc_active = true;
+                            self.last_col0 = disc_col0;
+                            self.last_row0 = disc_row0;
+                            self.last_disc_cols = disc_cols;
+                            self.last_disc_rows = disc_rows;
+                            self.last_side = side;
+                            self.last_aspect = k;
+                            self.last_angle = p.angle;
+                            self.last_fade = self.fade;
+                            self.last_img_gen = self.img_gen;
+                            self.last_sheen = p.sheen;
                         }
                     }
-                    if (cover > 0) any = true;
-                    const bgw = (4 - cover) / 4;
-                    halves[h] = .{
-                        acc[0] / 4 + bgf[0] * bgw,
-                        acc[1] / 4 + bgf[1] * bgw,
-                        acc[2] / 4 + bgf[2] * bgw,
+                }
+            } else if (self.disc_active) {
+                if (p.kitty_out) |out| kitty.Encoder.emitDeleteAll(out, self.alloc) catch {};
+                self.disc_active = false;
+            }
+        } else if (self.disc_active) {
+            if (p.kitty_out) |out| kitty.Encoder.emitDeleteAll(out, self.alloc) catch {};
+            self.disc_active = false;
+        }
+
+        self.drawInfo(s, &p, vis_rows, disc_col0, disc_row0, disc_cols, disc_rows, pal.c1, pal.c2, bg);
+    }
+
+    pub fn rasterizeDiscRgba(
+        self: *const Renderer,
+        rgba: []u8,
+        side: usize,
+        box_w: f32,
+        box_h: f32,
+        rd: f32,
+        rh: f32,
+        p: *const Params,
+    ) void {
+        const ca = @cos(p.angle);
+        const sa = @sin(p.angle);
+        const inv_rd = 1.0 / rd;
+        const inv_side = 1.0 / @as(f32, @floatFromInt(side));
+        const px_step = @max(box_w, box_h) * inv_side;
+        const aa_half = px_step * 0.75;
+        const outer_hi = rd + aa_half;
+        const outer_lo = rd - aa_half;
+        const outer_hi2 = outer_hi * outer_hi;
+        const inner_lo = @max(0.0, rh - aa_half);
+        const inner_hi = rh + aa_half;
+        const use_old = self.fade < 1.0 and self.old_img != null and self.old_tex.size == self.tex.size;
+
+        // cos(0.85) and sin(0.85) for fast specular sheen without atan2
+        const sheen_cx: f32 = 0.65998315;
+        const sheen_sy: f32 = 0.7512804;
+
+        for (0..side) |py| {
+            const ny = ((@as(f32, @floatFromInt(py)) + 0.5) * inv_side - 0.5) * box_h;
+            const ny2 = ny * ny;
+            const row_off = py * side * 4;
+            for (0..side) |px| {
+                const nx = ((@as(f32, @floatFromInt(px)) + 0.5) * inv_side - 0.5) * box_w;
+                const d2 = nx * nx + ny2;
+                const o = row_off + px * 4;
+                if (d2 >= outer_hi2) {
+                    rgba[o] = 0;
+                    rgba[o + 1] = 0;
+                    rgba[o + 2] = 0;
+                    rgba[o + 3] = 0;
+                    continue;
+                }
+                const rho = @sqrt(d2);
+                if (rho <= inner_lo) {
+                    rgba[o] = 0;
+                    rgba[o + 1] = 0;
+                    rgba[o + 2] = 0;
+                    rgba[o + 3] = 0;
+                    continue;
+                }
+
+                const outer_a = if (rho <= outer_lo) 1.0 else smoothstep(outer_hi, outer_lo, rho);
+                const inner_a = if (rho >= inner_hi) 1.0 else smoothstep(inner_lo, inner_hi, rho);
+                const alpha = outer_a * inner_a;
+
+                const u = (nx * ca + ny * sa) * inv_rd;
+                const v = (-nx * sa + ny * ca) * inv_rd;
+                var col = self.tex.sample(u, v);
+                if (use_old) col = mix3(self.old_tex.sample(u, v), col, self.fade);
+
+                const rn = rho * inv_rd;
+                // rim bevel, spindle collar shadow, subtle vinyl micro-grooves
+                var shade: f32 = 1.0;
+                if (rn > 0.965) shade *= mix1(1.0, 0.68, smoothstep(0.965, 1.0, rn));
+                if (rho < rh * 1.9) shade *= mix1(0.52, 1.0, smoothstep(rh, rh * 1.9, rho));
+                shade *= 1.0 - 0.032 * (0.5 + 0.5 * @sin(rn * 190.0));
+                col = .{ col[0] * shade, col[1] * shade, col[2] * shade };
+
+                if (p.sheen and rho > 1e-4) {
+                    const cphi = (nx * sheen_cx + ny * sheen_sy) / rho;
+                    const c2 = cphi * cphi;
+                    const c6 = c2 * c2 * c2;
+                    const w = c6 * c6 * 0.17 * smoothstep(0.10, 0.40, rn);
+                    col = .{
+                        col[0] + (255.0 - col[0]) * w,
+                        col[1] + (255.0 - col[1]) * w,
+                        col[2] + (255.0 - col[2]) * w,
                     };
                 }
-                if (!any) continue;
-                const cell = s.at(c, r);
-                cell.cp = 0x2580; // ▀
-                cell.fg = toRgb(halves[0]);
-                cell.bg = toRgb(halves[1]);
+
+                rgba[o] = @intFromFloat(std.math.clamp(col[0], 0, 255));
+                rgba[o + 1] = @intFromFloat(std.math.clamp(col[1], 0, 255));
+                rgba[o + 2] = @intFromFloat(std.math.clamp(col[2], 0, 255));
+                rgba[o + 3] = @intFromFloat(std.math.clamp(alpha * 255.0, 0, 255));
             }
         }
     }
@@ -288,7 +388,7 @@ pub const Renderer = struct {
         while (r < r_hi) : (r += 1) {
             var c = c_lo;
             while (c < c_hi) : (c += 1) {
-                // skip cells owned by the disc
+                // skip cells owned by the disc interior
                 const ccx = @as(f32, @floatFromInt(c)) + 0.5 - cx;
                 const ccy = (@as(f32, @floatFromInt(r)) + 0.5) * k - cy;
                 const cd = @sqrt(ccx * ccx + ccy * ccy);
@@ -313,7 +413,6 @@ pub const Renderer = struct {
                         if (rho <= top) {
                             const q = std.math.clamp((rho - r0) / ring_h, 0, 1);
                             col = mix3(c1, c2, q);
-                            // brighten the crest of the wave
                             if (top - rho < 0.6) col = mix3(col, white, 0.35);
                             const dim = 0.55 + 0.45 * std.math.clamp(v * 1.4 + 0.2, 0, 1);
                             col = .{ col[0] * dim, col[1] * dim, col[2] * dim };
@@ -336,18 +435,37 @@ pub const Renderer = struct {
         }
     }
 
-    fn drawInfo(self: *Renderer, s: *Screen, p: *const Params, vis_rows: usize, c1: [3]f32, c2: [3]f32, bg: Rgb) void {
+    fn drawInfo(
+        self: *Renderer,
+        s: *Screen,
+        p: *const Params,
+        vis_rows: usize,
+        disc_col0: usize,
+        disc_row0: usize,
+        disc_cols: usize,
+        disc_rows: usize,
+        c1: [3]f32,
+        c2: [3]f32,
+        bg: Rgb,
+    ) void {
         _ = self;
+        _ = disc_row0;
+        _ = disc_rows;
         const cols = s.cols;
         const snap = p.snap;
         const light = toRgb(mix3(c2, .{ 255, 255, 255 }, 0.6));
         const dim = toRgb(mix3(c1, .{ 150, 150, 150 }, 0.6));
         const faint = toRgb(mix3(.{ @floatFromInt(bg.r), @floatFromInt(bg.g), @floatFromInt(bg.b) }, .{ 160, 160, 160 }, 0.35));
+        const warn_col = Rgb{ .r = 250, .g = 200, .b = 90 };
         var buf: [1024]u8 = undefined;
 
         if (p.show_fps) {
             const t = std.fmt.bufPrint(&buf, " {d:.1} fps ", .{p.fps}) catch "";
             _ = s.text(0, 0, t, faint, false);
+        }
+        if (p.kitty_warn) {
+            const t = " Kitty graphics non supportato: solo visualizer Braille (--force-kitty) ";
+            _ = s.text(0, if (p.show_fps) 1 else 0, t, warn_col, true);
         }
         if (!p.cava_ok) {
             const t = " cava non disponibile ";
@@ -355,19 +473,30 @@ pub const Renderer = struct {
         }
         if (p.show_help) {
             const lines = [_][]const u8{
-                " spazio  play/pausa",  " n / p   traccia succ./prec.",
-                " ← / →   seek ∓5s",    " ↑ / ↓   volume ±1dB",
-                " s / r   shuffle / repeat", " l       riflessi on/off",
-                " b       sfondo tinta/nero", " i       inverti bassi su/giù",
-                " f       mostra fps",  " q       esci",
+                " spazio  play/pausa",
+                " n / p   traccia succ./prec.",
+                " <- / -> seek -/+5s",
+                " ^ / v   volume +/-1dB",
+                " s / r   shuffle / repeat",
+                " l       riflessi on/off",
+                " b       sfondo tinta/nero",
+                " i       inverti bassi su/giu",
+                " f       mostra fps",
+                " q       esci",
             };
-            for (lines, 0..) |l, i| _ = s.text(0, i + 1, l, light, false);
+            const help_w: usize = 30;
+            const col_start: usize = if (disc_cols > 0 and cols >= disc_col0 + disc_cols + help_w + 1)
+                cols - help_w - 1
+            else
+                0;
+            const row_start: usize = if (p.kitty_warn) 2 else if (p.show_fps) 1 else 0;
+            for (lines, 0..) |l, i| _ = s.text(col_start, row_start + i, l, light, false);
         }
 
-        if (vis_rows == s.rows) return; // no room for info
+        if (vis_rows == s.rows) return;
         const r1 = vis_rows + 1;
         if (!snap.connected) {
-            centered(s, r1, "in attesa di cliamp…  (avvia `cliamp` o lascia che vinyl lanci il demone)", dim, false);
+            centered(s, r1, "in attesa di cliamp... (avvia `cliamp` o lascia che vinyl lanci il demone)", dim, false);
             return;
         }
         const title = if (snap.title.len > 0) snap.title.get() else std.fs.path.basename(snap.path.get());
@@ -379,7 +508,6 @@ pub const Renderer = struct {
         };
         centered(s, r1 + 1, sub, dim, false);
 
-        // progress line
         const r3 = r1 + 2;
         if (r3 >= s.rows) return;
         var lb: [16]u8 = undefined;
@@ -439,7 +567,6 @@ fn fmtTime(buf: []u8, secs: f64) []const u8 {
 }
 
 fn catmull(v: []const f32, x: f32) f32 {
-    const n = v.len;
     const i: isize = @intFromFloat(@floor(x));
     const t = x - @floor(x);
     const at = struct {
@@ -448,7 +575,6 @@ fn catmull(v: []const f32, x: f32) f32 {
             return arr[jj];
         }
     }.f;
-    _ = n;
     const p0 = at(v, i - 1);
     const p1 = at(v, i);
     const p2 = at(v, i + 1);
@@ -459,8 +585,13 @@ fn catmull(v: []const f32, x: f32) f32 {
 }
 
 fn smoothstep(e0: f32, e1: f32, x: f32) f32 {
+    if (e0 == e1) return if (x >= e1) 1 else 0;
     const t = std.math.clamp((x - e0) / (e1 - e0), 0, 1);
     return t * t * (3 - 2 * t);
+}
+
+inline fn mix1(a: f32, b: f32, t: f32) f32 {
+    return a + (b - a) * t;
 }
 
 inline fn mix3(a: [3]f32, b: [3]f32, t: f32) [3]f32 {
@@ -477,4 +608,44 @@ inline fn toRgb(c: [3]f32) Rgb {
         .g = @intFromFloat(std.math.clamp(c[1], 0, 255)),
         .b = @intFromFloat(std.math.clamp(c[2], 0, 255)),
     };
+}
+
+test "rasterizeDiscRgba produces transparent corners and spindle hole" {
+    const alloc = std.testing.allocator;
+    var r = Renderer{ .alloc = alloc };
+    defer r.deinit();
+    const img = try art.placeholder(alloc, 42);
+    r.setImage(img);
+    r.ensureTextures(128);
+
+    const side: usize = 64;
+    const rgba = try alloc.alloc(u8, side * side * 4);
+    defer alloc.free(rgba);
+    const snap = cliamp.Snapshot{};
+    const p = Params{
+        .aspect = 2.0,
+        .angle = 0.5,
+        .dt = 0.016,
+        .left = &[_]f32{0} ** 16,
+        .right = &[_]f32{0} ** 16,
+        .snap = &snap,
+        .position = 0,
+        .sheen = true,
+        .bass_top = false,
+        .show_fps = false,
+        .show_help = false,
+        .fps = 60,
+        .bg_mode = .tint,
+        .cava_ok = true,
+    };
+    r.rasterizeDiscRgba(rgba, side, 20.0, 20.0, 10.0, 1.0, &p);
+
+    // Top-left corner (0, 0) must be transparent
+    try std.testing.expectEqual(@as(u8, 0), rgba[3]);
+    // Center pixel (32, 32) inside spindle hole must be transparent
+    const center_o = (32 * side + 32) * 4;
+    try std.testing.expectEqual(@as(u8, 0), rgba[center_o + 3]);
+    // Mid-radius pixel (48, 32) on disc body must be opaque
+    const body_o = (32 * side + 48) * 4;
+    try std.testing.expectEqual(@as(u8, 255), rgba[body_o + 3]);
 }
