@@ -30,9 +30,12 @@ const usage =
     \\  --no-sheen          disattiva i riflessi del vinile
     \\  --keep-daemon       non fermare il demone lanciato da vinyl all'uscita
     \\  --no-daemon         non lanciare mai cliamp, attendi solo il socket
+    \\  --install-plugin    installa e approva il plugin Lua bridge per cliamp
     \\  -h, --help          questo aiuto
     \\
 ;
+
+const bridge_lua = @embedFile("vinyl-art-bridge.lua");
 
 const Opts = struct {
     fps: u32 = 60,
@@ -65,6 +68,9 @@ pub fn main() !void {
         const eq = std.mem.eql;
         if (eq(u8, a, "-h") or eq(u8, a, "--help")) {
             std.fs.File.stdout().writeAll(usage) catch {};
+            return;
+        } else if (eq(u8, a, "--install-plugin")) {
+            try installPlugin(gpa);
             return;
         } else if (eq(u8, a, "--fps") and i + 1 < argv.len) {
             i += 1;
@@ -301,5 +307,38 @@ pub fn main() !void {
         } else if (after - next_frame > frame_ns * 4) {
             next_frame = after; // fell behind: don't try to catch up
         }
+    }
+}
+
+fn installPlugin(alloc: std.mem.Allocator) !void {
+    var dbuf: [480]u8 = undefined;
+    const cfg_dir = try cliamp.configDir(&dbuf);
+
+    var pdir_buf: [512]u8 = undefined;
+    const plugins_dir = try std.fmt.bufPrint(&pdir_buf, "{s}/plugins", .{cfg_dir});
+    try std.fs.cwd().makePath(plugins_dir);
+
+    var dest_buf: [544]u8 = undefined;
+    const dest = try std.fmt.bufPrint(&dest_buf, "{s}/vinyl-art-bridge.lua", .{plugins_dir});
+    {
+        const f = try std.fs.cwd().createFile(dest, .{ .truncate = true });
+        defer f.close();
+        try f.writeAll(bridge_lua);
+    }
+
+    var msg_buf: [640]u8 = undefined;
+    const msg = try std.fmt.bufPrint(&msg_buf, "Plugin installato in: {s}\n", .{dest});
+    std.fs.File.stdout().writeAll(msg) catch {};
+
+    var child = std.process.Child.init(&.{ "cliamp", "plugins", "trust", "vinyl-art-bridge" }, alloc);
+    child.stdin_behavior = .Inherit;
+    child.stdout_behavior = .Inherit;
+    child.stderr_behavior = .Inherit;
+    const term_res = child.spawnAndWait() catch |err| {
+        std.debug.print("Avvio di `cliamp plugins trust` fallito ({s}). Esegui manualmente:\n  cliamp plugins trust vinyl-art-bridge\n", .{@errorName(err)});
+        return;
+    };
+    if (term_res != .Exited or term_res.Exited != 0) {
+        std.debug.print("Approva manualmente il plugin con:\n  cliamp plugins trust vinyl-art-bridge\n", .{});
     }
 }

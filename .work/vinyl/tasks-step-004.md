@@ -15,11 +15,12 @@ Implementare e integrare il plugin Lua bridge per cliamp per risolvere le cover 
   - mode: isolated
   - mode_reason: Crea solo plugins/vinyl-art-bridge.lua senza toccare src/*.zig
   - result: Creato plugins/vinyl-art-bridge.lua per esportare path e album_art_url su /tmp/cliamp-vinyl-art.txt
-- [ ] s4-plugin-install | Aggiungere comando o script di installazione e trust del plugin Lua bridge per cliamp
+- [x] s4-plugin-install | Aggiungere comando o script di installazione e trust del plugin Lua bridge per cliamp
   - tags: cliamp, plugin, ux
   - deps: s4-lua-plugin
   - mode: integrated
   - mode_reason: Condivide la codebase Zig in src/ o esegue verifica integrata
+  - result: Aggiunto --install-plugin in src/main.zig (con @embedFile) e scripts/install-plugin.sh; verificato su /tmp/vcd/cfg con cliamp plugins list -> trusted
 - [ ] s4-art-verify | Verificare caricamento cover art per tutte le sorgenti (locale embedded/sidecar, bridge remoto, MPRIS, placeholder)
   - tags: art, verify
   - deps: s4-plugin-install, s2-frame-loop

@@ -46,11 +46,17 @@ pub const Snapshot = struct {
     stamp_ns: i128 = 0,
 };
 
-pub fn socketPath(buf: []u8) ![]const u8 {
-    if (posix.getenv("CLIAMP_CONFIG_DIR")) |d| return std.fmt.bufPrint(buf, "{s}/cliamp.sock", .{d});
-    if (posix.getenv("XDG_CONFIG_HOME")) |d| return std.fmt.bufPrint(buf, "{s}/cliamp/cliamp.sock", .{d});
+pub fn configDir(buf: []u8) ![]const u8 {
+    if (posix.getenv("CLIAMP_CONFIG_DIR")) |d| return std.fmt.bufPrint(buf, "{s}", .{d});
+    if (posix.getenv("XDG_CONFIG_HOME")) |d| return std.fmt.bufPrint(buf, "{s}/cliamp", .{d});
     const home = posix.getenv("HOME") orelse "/tmp";
-    return std.fmt.bufPrint(buf, "{s}/.config/cliamp/cliamp.sock", .{home});
+    return std.fmt.bufPrint(buf, "{s}/.config/cliamp", .{home});
+}
+
+pub fn socketPath(buf: []u8) ![]const u8 {
+    var dbuf: [480]u8 = undefined;
+    const dir = try configDir(&dbuf);
+    return std.fmt.bufPrint(buf, "{s}/cliamp.sock", .{dir});
 }
 
 fn connect(path: []const u8) !posix.socket_t {
