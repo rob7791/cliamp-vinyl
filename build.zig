@@ -20,4 +20,12 @@ pub fn build(b: *std.Build) void {
     if (b.args) |args| run_cmd.addArgs(args);
     const run_step = b.step("run", "Run vinyl");
     run_step.dependOn(&run_cmd.step);
+
+    const home = std.posix.getenv("HOME") orelse "/tmp";
+    const local_dest = b.fmt("{s}/.local/bin/vinyl", .{home});
+    const inst_cmd = b.addSystemCommand(&.{ "install", "-Dm755" });
+    inst_cmd.addArtifactArg(exe);
+    inst_cmd.addArg(local_dest);
+    const install_local = b.step("install-local", "Install vinyl binary to ~/.local/bin/vinyl");
+    install_local.dependOn(&inst_cmd.step);
 }
