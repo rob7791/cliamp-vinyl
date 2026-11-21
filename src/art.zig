@@ -30,7 +30,7 @@ pub const Loader = struct {
 
     // worker-private state
     track_key: u64 = 0,
-    used_url: u64 = 0,
+    tried_urls: [3]u64 = .{ 0, 0, 0 },
     has_art: bool = false,
     tried_local: bool = false,
     bridge_mtime: i128 = 0,
@@ -84,7 +84,7 @@ pub const Loader = struct {
         const key = h.final();
         if (key != self.track_key) {
             self.track_key = key;
-            self.used_url = 0;
+            self.tried_urls = .{ 0, 0, 0 };
             self.has_art = false;
             self.tried_local = false;
         }
@@ -94,27 +94,26 @@ pub const Loader = struct {
         // 1) URL carried by the snapshot, 2) URL published by the Lua bridge plugin,
         // 3) derived cover art URL for Navidrome/Subsonic or YouTube/YTMusic.
         var remote_buf: [4096]u8 = undefined;
-        var url: []const u8 = snap.art_url.get();
-        if (url.len == 0 and self.bridge_url.items.len > 0 and
+        const bridge_candidate: []const u8 = if (self.bridge_url.items.len > 0 and
             self.bridge_path_hash == std.hash.Wyhash.hash(0, snap.path.get()))
-        {
-            url = self.bridge_url.items;
-        }
-        if (url.len == 0) {
-            if (deriveRemoteArtUrl(snap.path.get(), &remote_buf)) |derived| {
-                url = derived;
-            }
-        }
-        if (url.len > 0) {
+            self.bridge_url.items
+        else
+            "";
+        const derived_candidate: []const u8 = deriveRemoteArtUrl(snap.path.get(), &remote_buf) orelse "";
+        const candidates = [_][]const u8{ snap.art_url.get(), bridge_candidate, derived_candidate };
+        for (candidates, 0..) |url, idx| {
+            if (url.len == 0) continue;
             const uh = std.hash.Wyhash.hash(1, url);
-            if (uh != self.used_url) {
-                self.used_url = uh;
-                if (self.loadUrl(url)) |img| {
-                    self.has_art = true;
-                    self.publish(img);
-                    return;
-                } else |_| {}
+            if (uh == self.tried_urls[idx]) {
+                if (self.has_art) return;
+                continue;
             }
+            self.tried_urls[idx] = uh;
+            if (self.loadUrl(url)) |img| {
+                self.has_art = true;
+                self.publish(img);
+                return;
+            } else |_| {}
         }
         if (self.has_art or self.tried_local) return;
         self.tried_local = true;

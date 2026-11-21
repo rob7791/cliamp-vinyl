@@ -243,16 +243,14 @@ pub const Client = struct {
             if (getStr(t, "artist")) |x| s.artist.set(x);
             if (getStr(t, "album")) |x| s.album.set(x);
             if (getStr(t, "path")) |x| s.path.set(x);
-            // Any field that looks like a cover URL.
+            // Any field that looks like a cover URL (never match "artist"!).
             var it = t.iterator();
             while (it.next()) |e| {
                 const k = e.key_ptr.*;
                 if (e.value_ptr.* != .string) continue;
                 const v = e.value_ptr.string;
                 if (v.len == 0 or v.len > 4096) continue;
-                if (std.mem.indexOf(u8, k, "art") != null or std.mem.indexOf(u8, k, "cover") != null or
-                    std.mem.indexOf(u8, k, "image") != null or std.mem.indexOf(u8, k, "thumb") != null)
-                {
+                if (isArtUrlField(k, v)) {
                     s.art_url.set(v);
                     break;
                 }
@@ -277,4 +275,30 @@ fn getNum(o: std.json.ObjectMap, key: []const u8) f64 {
         .integer => |i| @floatFromInt(i),
         else => 0,
     };
+}
+
+fn isArtUrlField(k: []const u8, v: []const u8) bool {
+    const key_match =
+        std.mem.indexOf(u8, k, "art_url") != null or
+        std.mem.indexOf(u8, k, "artUrl") != null or
+        std.mem.indexOf(u8, k, "artwork") != null or
+        std.mem.indexOf(u8, k, "cover") != null or
+        std.mem.indexOf(u8, k, "image") != null or
+        std.mem.indexOf(u8, k, "thumb") != null;
+    if (!key_match) return false;
+    return std.mem.startsWith(u8, v, "http://") or
+        std.mem.startsWith(u8, v, "https://") or
+        std.mem.startsWith(u8, v, "file://") or
+        std.mem.startsWith(u8, v, "data:") or
+        std.mem.startsWith(u8, v, "/");
+}
+
+test "isArtUrlField ignores artist and accepts real art URLs" {
+    try std.testing.expect(!isArtUrlField("artist", "Toto"));
+    try std.testing.expect(!isArtUrlField("album_artist", "Toto"));
+    try std.testing.expect(!isArtUrlField("cover_id", "al-123"));
+    try std.testing.expect(isArtUrlField("album_art_url", "https://i.scdn.co/image/abc"));
+    try std.testing.expect(isArtUrlField("artUrl", "file:///tmp/cover.jpg"));
+    try std.testing.expect(isArtUrlField("cover_path", "/home/user/cover.png"));
+    try std.testing.expect(isArtUrlField("artwork", "data:image/png;base64,AAAA"));
 }
