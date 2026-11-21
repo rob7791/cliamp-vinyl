@@ -19,11 +19,15 @@ pub const Texture = struct {
         self.* = .{};
     }
 
-    /// Area-resample the 512x512 source into a `size`x`size` float texture.
+    /// Area-resample the source image into a `size`x`size` float texture.
     fn build(self: *Texture, alloc: std.mem.Allocator, img: *const art.Image, size: usize) !void {
         self.deinit(alloc);
         self.size = size;
         self.data = try alloc.alloc(f32, size * size * 3);
+        if (size == art.SRC) {
+            for (img.px, 0..) |b, i| self.data[i] = @floatFromInt(b);
+            return;
+        }
         const s: f32 = @as(f32, art.SRC) / @as(f32, @floatFromInt(size));
         for (0..size) |y| {
             const y0: usize = @intFromFloat(@floor(@as(f32, @floatFromInt(y)) * s));
@@ -109,6 +113,7 @@ pub const Params = struct {
     kitty_out: ?*std.ArrayList(u8) = null,
     kitty_warn: bool = false,
     force_redraw: bool = false,
+    cell_px_w: f32 = 0,
 };
 
 pub const Renderer = struct {
@@ -405,8 +410,13 @@ pub const Renderer = struct {
             self.drawRing(s, &p, cx, cy, rd, r0, ring_h, ring_min, vis_rows, pal.c1, pal.c2, bgf);
 
             if (p.kitty_enc) |enc| {
-                const side: usize = std.math.clamp(disc_cols * 6, 96, 320) & ~@as(usize, 1);
-                self.ensureTextures(@min(art.SRC, side * 2));
+                const est_px: usize = if (p.cell_px_w > 0)
+                    @intFromFloat(@round(@as(f32, @floatFromInt(disc_cols)) * p.cell_px_w))
+                else
+                    disc_cols * 14;
+                const max_side: usize = if (enc.mode == .file) art.SRC else 384;
+                const side: usize = std.math.clamp(est_px, 128, max_side) & ~@as(usize, 1);
+                self.ensureTextures(@min(art.SRC, @max(side, 512)));
                 if (self.img != null and self.tex.size > 0) {
                     const dirty = p.force_redraw or !self.disc_active or
                         self.last_col0 != disc_col0 or self.last_row0 != disc_row0 or
@@ -463,7 +473,7 @@ pub const Renderer = struct {
         const inv_rd = 1.0 / rd;
         const inv_side = 1.0 / @as(f32, @floatFromInt(side));
         const px_step = @max(box_w, box_h) * inv_side;
-        const aa_half = px_step * 0.75;
+        const aa_half = px_step * 0.5;
         const outer_hi = rd + aa_half;
         const outer_lo = rd - aa_half;
         const outer_hi2 = outer_hi * outer_hi;

@@ -24,7 +24,7 @@ const usage =
     \\  --bars N            barre per canale (default 48)
     \\  --aspect F          rapporto altezza/larghezza cella (default: auto, o 2.1)
     \\  --source NAME       sorgente PulseAudio/PipeWire per cava (default auto)
-    \\  --kitty-mode MODE   trasporto Kitty: direct (default) o file
+    \\  --kitty-mode MODE   trasporto Kitty: file (default, alta ris.) o direct (SSH)
     \\  --force-kitty       forza il protocollo Kitty anche se non rilevato
     \\  --no-kitty          disattiva il disco Kitty (solo visualizer Braille)
     \\  --bass-top          bassi in alto invece che in basso
@@ -44,7 +44,7 @@ const Opts = struct {
     bars: usize = 48,
     aspect: ?f32 = null,
     source: ?[]const u8 = null,
-    kitty_mode: kitty.Mode = .direct,
+    kitty_mode: kitty.Mode = .file,
     force_kitty: bool = false,
     no_kitty: bool = false,
     bass_top: bool = false,
@@ -316,6 +316,10 @@ pub fn main() !void {
         // size
         const sz = term.getSize();
         try screen.resize(sz.cols, sz.rows);
+        const cell_px_w: f32 = if (sz.xpix > 0 and sz.cols > 0)
+            @as(f32, @floatFromInt(sz.xpix)) / @as(f32, @floatFromInt(sz.cols))
+        else
+            0;
         const aspect: f32 = opts.aspect orelse blk: {
             if (sz.xpix > 0 and sz.ypix > 0) {
                 const cw = @as(f32, @floatFromInt(sz.xpix)) / @as(f32, @floatFromInt(sz.cols));
@@ -384,6 +388,7 @@ pub fn main() !void {
             .kitty_out = &kitty_out,
             .kitty_warn = kitty_warn,
             .force_redraw = force_redraw,
+            .cell_px_w = cell_px_w,
         });
         term.writeAll(try screen.flush(kitty_out.items));
 

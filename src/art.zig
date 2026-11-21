@@ -4,7 +4,7 @@ const posix = std.posix;
 const cliamp = @import("cliamp.zig");
 const Rgb = @import("screen.zig").Rgb;
 
-pub const SRC = 512;
+pub const SRC = 768;
 pub const bridge_path = "/tmp/cliamp-vinyl-art.txt";
 
 pub const Image = struct {
@@ -258,7 +258,7 @@ pub const Loader = struct {
             .allocator = self.alloc,
             .argv = &.{
                 "ffmpeg",   "-v",        "error", "-nostdin", "-i", path, "-an", "-frames:v", "1",
-                "-vf",      "scale=512:512:force_original_aspect_ratio=increase:flags=lanczos,crop=512:512",
+                "-vf",      "scale=768:768:force_original_aspect_ratio=increase:flags=lanczos,crop=768:768",
                 "-f",       "rawvideo",  "-pix_fmt", "rgb24", "pipe:1",
             },
             .max_output_bytes = SRC * SRC * 3 + 4096,

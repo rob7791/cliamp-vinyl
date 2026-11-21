@@ -56,10 +56,12 @@ pub const Encoder = struct {
         self.rgba = try self.alloc.alloc(u8, nbytes);
         self.side = side;
 
-        const enc_len = std.base64.standard.Encoder.calcSize(nbytes);
-        if (self.b64.len < enc_len) {
-            if (self.b64.len > 0) self.alloc.free(self.b64);
-            self.b64 = try self.alloc.alloc(u8, enc_len);
+        if (self.mode == .direct) {
+            const enc_len = std.base64.standard.Encoder.calcSize(nbytes);
+            if (self.b64.len < enc_len) {
+                if (self.b64.len > 0) self.alloc.free(self.b64);
+                self.b64 = try self.alloc.alloc(u8, enc_len);
+            }
         }
     }
 

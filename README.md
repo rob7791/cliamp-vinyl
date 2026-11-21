@@ -99,7 +99,7 @@ Tutti gli argomenti non riconosciuti da `vinyl` vengono inoltrati direttamente a
 | `--bars N` | Numero di barre per canale per `cava` (intervallo `8`–`128`, default `48`) |
 | `--aspect F` | Rapporto altezza/larghezza delle celle (intervallo `1.0`–`4.0`; default rilevamento automatico o `2.1`) |
 | `--source NAME` | Sorgente audio PulseAudio/PipeWire per `cava` (default `auto`) |
-| `--kitty-mode MODE` | Trasporto fotogrammi Kitty: `direct` (default, base64 su PTY) o `file` (ring-buffer a 4 slot `/tmp/vinyl-kitty-<pid>-<slot>.rgba`) |
+| `--kitty-mode MODE` | Trasporto fotogrammi Kitty: `file` (default, alta risoluzione fino a 768×768 su ring-buffer `/tmp/vinyl-kitty-<pid>-<slot>.rgba`) o `direct` (base64 su PTY, utile su SSH) |
 | `--force-kitty` | Forza il rendering del disco Kitty anche se il terminale non viene rilevato |
 | `--no-kitty` | Disattiva il disco Kitty (mostra solo il visualizer Braille e i metadati) |
 | `--bass-top` | Posiziona le frequenze basse nella parte superiore dell'anello invece che in basso |
