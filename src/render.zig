@@ -96,7 +96,7 @@ pub const Params = struct {
     fps: f32,
     rpm: f32 = 33.333,
     show_rpm: bool = false,
-    peak_mode: PeakMode = .ellipsis,
+    peak_mode: PeakMode = .path,
     glow: bool = true,
     aurora: bool = true,
     hud_msg: []const u8 = "",
@@ -634,9 +634,9 @@ pub const Renderer = struct {
         const peak_w = k * 0.13;
         const path_w = k * 0.14;
         const white = [3]f32{ 255, 255, 255 };
-        const skyblue = Rgb{ .r = 135, .g = 206, .b = 235 };
-        const limegreen = Rgb{ .r = 50, .g = 205, .b = 50 };
-        const crimson = Rgb{ .r = 220, .g = 20, .b = 60 };
+        const band_low_col = Rgb{ .r = 102, .g = 51, .b = 153 }; // rebeccapurple
+        const band_mid_col = Rgb{ .r = 0, .g = 128, .b = 128 }; // teal
+        const band_high_col = Rgb{ .r = 255, .g = 255, .b = 0 }; // yellow
 
         var r = r_lo;
         while (r < r_hi) : (r += 1) {
@@ -706,7 +706,7 @@ pub const Renderer = struct {
                             const mid_next = (r_cur + r_next) * 0.5;
                             const seg_lo = @min(r_cur, @min(mid_prev, mid_next)) - path_w;
                             const seg_hi = @max(r_cur, @max(mid_prev, mid_next)) + path_w;
-                            if ((rho >= seg_lo and rho <= seg_hi) or (rho > top and rho <= r_cur)) {
+                            if ((rho >= seg_lo and rho <= seg_hi) or rho <= r_cur) {
                                 const right_side = th < std.math.pi;
                                 const t = if (right_side) th / std.math.pi else (TAU - th) / std.math.pi;
                                 const u = if (p.bass_top) t else 1.0 - t;
@@ -722,6 +722,8 @@ pub const Renderer = struct {
                         var col: [3]f32 = undefined;
                         if (hit_path) {
                             bits |= dot_bits[j][i];
+                            continue;
+                        } else if (p.peak_mode == .path) {
                             continue;
                         } else if (hit_layer > 0) {
                             bits |= dot_bits[j][i];
@@ -752,9 +754,9 @@ pub const Renderer = struct {
                 cell.fg = if (path_lit > 0)
                     toRgb(.{ path_acc[0] / path_lit, path_acc[1] / path_lit, path_acc[2] / path_lit })
                 else switch (cell_layer) {
-                    3 => skyblue,
-                    2 => limegreen,
-                    1 => crimson,
+                    3 => band_low_col,
+                    2 => band_mid_col,
+                    1 => band_high_col,
                     else => toRgb(.{ acc[0] / lit, acc[1] / lit, acc[2] / lit }),
                 };
             }
@@ -812,7 +814,7 @@ pub const Renderer = struct {
                 " s / r   shuffle / repeat",
                 " [ / ]   spin ∓5 RPM ({/} ∓1)",
                 " v / 0   preset RPM / reset",
-                " w       ellipsis / path / peak",
+                " w       path / ellipsis / peak",
                 " g       bagliore cassa on/off",
                 " a       aurora sub-bass on/off",
                 " l       riflessi on/off",
@@ -942,14 +944,14 @@ fn smoothstep(e0: f32, e1: f32, x: f32) f32 {
 
 /// Smooth color blend across the 3 frequency bands (full color in each band's core, smooth crossover between).
 fn pathBandColor(u: f32) [3]f32 {
-    const sky = [3]f32{ 135, 206, 235 };
-    const lime = [3]f32{ 50, 205, 50 };
-    const crim = [3]f32{ 220, 20, 60 };
-    if (u <= 0.26) return sky;
-    if (u < 0.44) return mix3(sky, lime, smoothstep(0.26, 0.44, u));
-    if (u <= 0.56) return lime;
-    if (u < 0.74) return mix3(lime, crim, smoothstep(0.56, 0.74, u));
-    return crim;
+    const low = [3]f32{ 102, 51, 153 }; // rebeccapurple
+    const mid = [3]f32{ 0, 128, 128 }; // teal
+    const high = [3]f32{ 255, 255, 0 }; // yellow
+    if (u <= 0.26) return low;
+    if (u < 0.44) return mix3(low, mid, smoothstep(0.26, 0.44, u));
+    if (u <= 0.56) return mid;
+    if (u < 0.74) return mix3(mid, high, smoothstep(0.56, 0.74, u));
+    return high;
 }
 
 inline fn mix1(a: f32, b: f32, t: f32) f32 {
@@ -1108,22 +1110,22 @@ test "PeakMode.ellipsis draws 3-band colors and PeakMode.path draws skyblue 1:1 
         .cava_ok = true,
     });
 
-    var skyblue_cells: usize = 0;
-    var lime_cells: usize = 0;
-    var crimson_cells: usize = 0;
+    var low_cells: usize = 0;
+    var mid_cells: usize = 0;
+    var high_cells: usize = 0;
     for (0..36) |row| {
         for (0..120) |col| {
             const cell = s.at(col, row);
             if (cell.cp >= 0x2800 and cell.cp <= 0x28FF) {
-                if (cell.fg.r == 135 and cell.fg.g == 206 and cell.fg.b == 235) skyblue_cells += 1;
-                if (cell.fg.r == 50 and cell.fg.g == 205 and cell.fg.b == 50) lime_cells += 1;
-                if (cell.fg.r == 220 and cell.fg.g == 20 and cell.fg.b == 60) crimson_cells += 1;
+                if (cell.fg.r == 102 and cell.fg.g == 51 and cell.fg.b == 153) low_cells += 1;
+                if (cell.fg.r == 0 and cell.fg.g == 128 and cell.fg.b == 128) mid_cells += 1;
+                if (cell.fg.r == 255 and cell.fg.g == 255 and cell.fg.b == 0) high_cells += 1;
             }
         }
     }
-    try std.testing.expect(skyblue_cells > 20);
-    try std.testing.expect(lime_cells > 10);
-    try std.testing.expect(crimson_cells > 10);
+    try std.testing.expect(low_cells > 20);
+    try std.testing.expect(mid_cells > 10);
+    try std.testing.expect(high_cells > 10);
     // bass_top = false => bass (path_low) is fatter at bottom (ANG/2) than top (0)
     try std.testing.expect(r.path_low[ANG / 2] > r.path_low[0] * 2.0);
     try std.testing.expect(r.path_high[0] > r.path_high[ANG / 2] * 2.0);
@@ -1171,22 +1173,22 @@ test "PeakMode.ellipsis draws 3-band colors and PeakMode.path draws skyblue 1:1 
         .bg_mode = .black,
         .cava_ok = true,
     });
-    var path_sky: usize = 0;
-    var path_lime: usize = 0;
-    var path_crimson: usize = 0;
+    var path_low: usize = 0;
+    var path_mid: usize = 0;
+    var path_high: usize = 0;
     for (0..36) |row| {
         for (0..120) |col| {
             const cell = s.at(col, row);
             if (cell.cp >= 0x2800 and cell.cp <= 0x28FF) {
-                if (cell.fg.r == 135 and cell.fg.g == 206 and cell.fg.b == 235) path_sky += 1;
-                if (cell.fg.r == 50 and cell.fg.g == 205 and cell.fg.b == 50) path_lime += 1;
-                if (cell.fg.r == 220 and cell.fg.g == 20 and cell.fg.b == 60) path_crimson += 1;
+                if (cell.fg.r == 102 and cell.fg.g == 51 and cell.fg.b == 153) path_low += 1;
+                if (cell.fg.r == 0 and cell.fg.g == 128 and cell.fg.b == 128) path_mid += 1;
+                if (cell.fg.r == 255 and cell.fg.g == 255 and cell.fg.b == 0) path_high += 1;
             }
         }
     }
-    try std.testing.expect(path_sky > 10);
-    try std.testing.expect(path_lime > 10);
-    try std.testing.expect(path_crimson > 10);
+    try std.testing.expect(path_low > 10);
+    try std.testing.expect(path_mid > 10);
+    try std.testing.expect(path_high > 10);
 }
 
 test "kick sidechain glow reacts stronger to sudden 100-300Hz hits and radiates past disc" {
