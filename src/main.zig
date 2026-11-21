@@ -194,6 +194,8 @@ pub fn main() !void {
     var glow = true;
     var aurora = true;
     var fx_color: render.FxColorMode = .cover;
+    var disc_res: render.DiscRes = .high;
+    var aa = true;
     var hud_msg: []const u8 = "";
     var hud_timer: f32 = 0;
     const rpm_presets = [_]f32{ 28.0, 33.333, 45.0, 78.0, 0.0, 16.666 };
@@ -308,6 +310,20 @@ pub fn main() !void {
                     hud_msg = if (fx_color == .spectrum) " fx: freq " else " fx: cover ";
                     hud_timer = 2.0;
                 },
+                'd' => {
+                    disc_res = switch (disc_res) {
+                        .high => .ultra,
+                        .ultra => .med,
+                        .med => .high,
+                    };
+                    hud_msg = disc_res.label();
+                    hud_timer = 2.0;
+                },
+                'x' => {
+                    aa = !aa;
+                    hud_msg = if (aa) " AA on " else " AA off ";
+                    hud_timer = 2.0;
+                },
                 '?', 'h' => show_help = !show_help,
                 else => {},
             }
@@ -389,6 +405,8 @@ pub fn main() !void {
             .kitty_warn = kitty_warn,
             .force_redraw = force_redraw,
             .cell_px_w = cell_px_w,
+            .disc_res = disc_res,
+            .aa = aa,
         });
         term.writeAll(try screen.flush(kitty_out.items));
 

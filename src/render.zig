@@ -12,20 +12,20 @@ const TAU: f32 = std.math.tau;
 
 pub const Texture = struct {
     size: usize = 0,
-    data: []f32 = &.{}, // size*size*3
+    data: []u8 = &.{}, // size*size*3 RGB (4x smaller than f32 for L2 cache locality)
 
     fn deinit(self: *Texture, alloc: std.mem.Allocator) void {
         alloc.free(self.data);
         self.* = .{};
     }
 
-    /// Area-resample the source image into a `size`x`size` float texture.
+    /// Area-resample the source image into a `size`x`size` RGB texture.
     fn build(self: *Texture, alloc: std.mem.Allocator, img: *const art.Image, size: usize) !void {
         self.deinit(alloc);
         self.size = size;
-        self.data = try alloc.alloc(f32, size * size * 3);
+        self.data = try alloc.alloc(u8, size * size * 3);
         if (size == art.SRC) {
-            for (img.px, 0..) |b, i| self.data[i] = @floatFromInt(b);
+            @memcpy(self.data, img.px);
             return;
         }
         const s: f32 = @as(f32, art.SRC) / @as(f32, @floatFromInt(size));
@@ -35,54 +35,92 @@ pub const Texture = struct {
             for (0..size) |x| {
                 const x0: usize = @intFromFloat(@floor(@as(f32, @floatFromInt(x)) * s));
                 const x1: usize = @max(x0 + 1, @min(art.SRC, @as(usize, @intFromFloat(@floor(@as(f32, @floatFromInt(x + 1)) * s)))));
-                var acc = [3]f32{ 0, 0, 0 };
+                var acc = [3]u32{ 0, 0, 0 };
                 var yy = y0;
                 while (yy < y1) : (yy += 1) {
                     var xx = x0;
                     while (xx < x1) : (xx += 1) {
                         const i = (yy * art.SRC + xx) * 3;
-                        acc[0] += @floatFromInt(img.px[i]);
-                        acc[1] += @floatFromInt(img.px[i + 1]);
-                        acc[2] += @floatFromInt(img.px[i + 2]);
+                        acc[0] += img.px[i];
+                        acc[1] += img.px[i + 1];
+                        acc[2] += img.px[i + 2];
                     }
                 }
-                const n: f32 = @floatFromInt((y1 - y0) * (x1 - x0));
+                const n: u32 = @intCast((y1 - y0) * (x1 - x0));
                 const o = (y * size + x) * 3;
-                self.data[o] = acc[0] / n;
-                self.data[o + 1] = acc[1] / n;
-                self.data[o + 2] = acc[2] / n;
+                self.data[o] = @intCast(acc[0] / n);
+                self.data[o + 1] = @intCast(acc[1] / n);
+                self.data[o + 2] = @intCast(acc[2] / n);
             }
         }
     }
 
-    /// Bilinear sample, u/v in [-1, 1].
-    inline fn sample(self: *const Texture, u: f32, v: f32) [3]f32 {
+    /// Bilinear sample, u/v in [-1, 1], returning [0..255] RGB.
+    inline fn sampleBilinear(self: *const Texture, u: f32, v: f32) [3]u8 {
         const fs: f32 = @floatFromInt(self.size - 1);
-        const fx = std.math.clamp((u + 1) * 0.5 * fs, 0, fs);
-        const fy = std.math.clamp((v + 1) * 0.5 * fs, 0, fs);
+        const fx = std.math.clamp((u + 1.0) * 0.5 * fs, 0.0, fs);
+        const fy = std.math.clamp((v + 1.0) * 0.5 * fs, 0.0, fs);
         const x0: usize = @intFromFloat(fx);
         const y0: usize = @intFromFloat(fy);
         const x1 = @min(x0 + 1, self.size - 1);
         const y1 = @min(y0 + 1, self.size - 1);
-        const tx = fx - @as(f32, @floatFromInt(x0));
-        const ty = fy - @as(f32, @floatFromInt(y0));
-        const a = self.data[(y0 * self.size + x0) * 3 ..][0..3];
-        const b = self.data[(y0 * self.size + x1) * 3 ..][0..3];
-        const c = self.data[(y1 * self.size + x0) * 3 ..][0..3];
-        const d = self.data[(y1 * self.size + x1) * 3 ..][0..3];
-        var out: [3]f32 = undefined;
-        inline for (0..3) |k| {
-            const top = a[k] + (b[k] - a[k]) * tx;
-            const bot = c[k] + (d[k] - c[k]) * tx;
-            out[k] = top + (bot - top) * ty;
-        }
-        return out;
+        const tx: u32 = @intFromFloat((fx - @as(f32, @floatFromInt(x0))) * 256.0);
+        const ty: u32 = @intFromFloat((fy - @as(f32, @floatFromInt(y0))) * 256.0);
+        const itx = 256 - tx;
+        const ity = 256 - ty;
+        const w00 = itx * ity;
+        const w10 = tx * ity;
+        const w01 = itx * ty;
+        const w11 = tx * ty;
+        const row0 = y0 * self.size * 3;
+        const row1 = y1 * self.size * 3;
+        const a = self.data[row0 + x0 * 3 ..][0..3];
+        const b = self.data[row0 + x1 * 3 ..][0..3];
+        const c = self.data[row1 + x0 * 3 ..][0..3];
+        const d = self.data[row1 + x1 * 3 ..][0..3];
+        return .{
+            @intCast((w00 * a[0] + w10 * b[0] + w01 * c[0] + w11 * d[0] + 32768) >> 16),
+            @intCast((w00 * a[1] + w10 * b[1] + w01 * c[1] + w11 * d[1] + 32768) >> 16),
+            @intCast((w00 * a[2] + w10 * b[2] + w01 * c[2] + w11 * d[2] + 32768) >> 16),
+        };
+    }
+
+    /// Nearest-neighbor sample, u/v in [-1, 1] (used when AA is off for max speed).
+    inline fn sampleNearest(self: *const Texture, u: f32, v: f32) [3]u8 {
+        const fs: f32 = @floatFromInt(self.size - 1);
+        const fx = std.math.clamp((u + 1.0) * 0.5 * fs + 0.5, 0.0, fs);
+        const fy = std.math.clamp((v + 1.0) * 0.5 * fs + 0.5, 0.0, fs);
+        const x: usize = @intFromFloat(fx);
+        const y: usize = @intFromFloat(fy);
+        const o = (y * self.size + x) * 3;
+        return .{ self.data[o], self.data[o + 1], self.data[o + 2] };
     }
 };
 
 pub const BgMode = enum { tint, black };
 pub const PeakMode = enum { ellipsis, path, peak };
 pub const FxColorMode = enum { cover, spectrum };
+pub const DiscRes = enum {
+    med,
+    high,
+    ultra,
+
+    pub fn maxSide(self: DiscRes) usize {
+        return switch (self) {
+            .med => 384,
+            .high => 512,
+            .ultra => art.SRC,
+        };
+    }
+
+    pub fn label(self: DiscRes) []const u8 {
+        return switch (self) {
+            .med => " disc: 384px ",
+            .high => " disc: 512px ",
+            .ultra => " disc: 768px ",
+        };
+    }
+};
 
 pub const Params = struct {
     aspect: f32, // cell height / cell width
@@ -114,6 +152,8 @@ pub const Params = struct {
     kitty_warn: bool = false,
     force_redraw: bool = false,
     cell_px_w: f32 = 0,
+    disc_res: DiscRes = .high,
+    aa: bool = true,
 };
 
 pub const Renderer = struct {
@@ -151,10 +191,23 @@ pub const Renderer = struct {
     last_fade: f32 = 1.0,
     last_img_gen: u64 = 0,
     last_sheen: bool = false,
+    last_aa: bool = true,
+
+    // precomputed per-pixel circular mask & static sheen LUT (rebuilt only on geometry/AA change)
+    lut_side: usize = 0,
+    lut_box_w: f32 = 0,
+    lut_box_h: f32 = 0,
+    lut_rd: f32 = 0,
+    lut_rh: f32 = 0,
+    lut_aa: bool = true,
+    disc_alpha: []u8 = &.{},
+    disc_sheen: []u8 = &.{},
 
     pub fn deinit(self: *Renderer) void {
         self.tex.deinit(self.alloc);
         self.old_tex.deinit(self.alloc);
+        if (self.disc_alpha.len > 0) self.alloc.free(self.disc_alpha);
+        if (self.disc_sheen.len > 0) self.alloc.free(self.disc_sheen);
         if (self.img) |i| i.destroy(self.alloc);
         if (self.old_img) |i| i.destroy(self.alloc);
     }
@@ -414,15 +467,16 @@ pub const Renderer = struct {
                     @intFromFloat(@round(@as(f32, @floatFromInt(disc_cols)) * p.cell_px_w))
                 else
                     disc_cols * 14;
-                const max_side: usize = if (enc.mode == .file) art.SRC else 384;
-                const side: usize = std.math.clamp(est_px, 128, max_side) & ~@as(usize, 1);
-                self.ensureTextures(@min(art.SRC, @max(side, 512)));
+                const mode_cap: usize = if (enc.mode == .file) p.disc_res.maxSide() else @min(p.disc_res.maxSide(), 384);
+                const side: usize = std.math.clamp(est_px, 128, mode_cap) & ~@as(usize, 1);
+                self.ensureTextures(@min(art.SRC, side));
                 if (self.img != null and self.tex.size > 0) {
                     const dirty = p.force_redraw or !self.disc_active or
                         self.last_col0 != disc_col0 or self.last_row0 != disc_row0 or
                         self.last_disc_cols != disc_cols or self.last_disc_rows != disc_rows or
                         self.last_side != side or @abs(self.last_aspect - k) > 1e-4 or
                         self.last_img_gen != self.img_gen or self.last_sheen != p.sheen or
+                        self.last_aa != p.aa or
                         self.fade < 1.0 or self.last_fade < 1.0 or
                         p.angle != self.last_angle;
                     if (dirty) {
@@ -443,6 +497,7 @@ pub const Renderer = struct {
                             self.last_fade = self.fade;
                             self.last_img_gen = self.img_gen;
                             self.last_sheen = p.sheen;
+                            self.last_aa = p.aa;
                         }
                     }
                 }
@@ -458,8 +513,93 @@ pub const Renderer = struct {
         self.drawInfo(s, &p, vis_rows, disc_col0, disc_row0, disc_cols, disc_rows, pal.c1, pal.c2, bg);
     }
 
+    fn ensureDiscLut(self: *Renderer, side: usize, box_w: f32, box_h: f32, rd: f32, rh: f32, aa: bool) void {
+        if (self.lut_side == side and
+            @abs(self.lut_box_w - box_w) < 1e-4 and
+            @abs(self.lut_box_h - box_h) < 1e-4 and
+            @abs(self.lut_rd - rd) < 1e-4 and
+            @abs(self.lut_rh - rh) < 1e-4 and
+            self.lut_aa == aa and
+            self.disc_alpha.len == side * side)
+        {
+            return;
+        }
+        const n = side * side;
+        if (self.disc_alpha.len != n) {
+            if (self.disc_alpha.len > 0) self.alloc.free(self.disc_alpha);
+            if (self.disc_sheen.len > 0) self.alloc.free(self.disc_sheen);
+            self.disc_alpha = self.alloc.alloc(u8, n) catch {
+                self.disc_alpha = &.{};
+                self.disc_sheen = &.{};
+                self.lut_side = 0;
+                return;
+            };
+            self.disc_sheen = self.alloc.alloc(u8, n) catch {
+                self.alloc.free(self.disc_alpha);
+                self.disc_alpha = &.{};
+                self.disc_sheen = &.{};
+                self.lut_side = 0;
+                return;
+            };
+        }
+        self.lut_side = side;
+        self.lut_box_w = box_w;
+        self.lut_box_h = box_h;
+        self.lut_rd = rd;
+        self.lut_rh = rh;
+        self.lut_aa = aa;
+
+        const inv_rd = 1.0 / rd;
+        const inv_side = 1.0 / @as(f32, @floatFromInt(side));
+        const px_step = @max(box_w, box_h) * inv_side;
+        const aa_half: f32 = if (aa) px_step * 0.5 else 0.0;
+        const outer_hi = rd + aa_half;
+        const outer_lo = rd - aa_half;
+        const outer_hi2 = outer_hi * outer_hi;
+        const inner_lo = @max(0.0, rh - aa_half);
+        const inner_hi = rh + aa_half;
+        const sheen_cx: f32 = 0.65998315;
+        const sheen_sy: f32 = 0.7512804;
+
+        for (0..side) |py| {
+            const ny = ((@as(f32, @floatFromInt(py)) + 0.5) * inv_side - 0.5) * box_h;
+            const ny2 = ny * ny;
+            const row_off = py * side;
+            for (0..side) |px| {
+                const nx = ((@as(f32, @floatFromInt(px)) + 0.5) * inv_side - 0.5) * box_w;
+                const d2 = nx * nx + ny2;
+                const idx = row_off + px;
+                if (d2 >= outer_hi2) {
+                    self.disc_alpha[idx] = 0;
+                    self.disc_sheen[idx] = 0;
+                    continue;
+                }
+                const rho = @sqrt(d2);
+                if (rho <= inner_lo) {
+                    self.disc_alpha[idx] = 0;
+                    self.disc_sheen[idx] = 0;
+                    continue;
+                }
+                const outer_a: f32 = if (!aa or rho <= outer_lo) 1.0 else smoothstep(outer_hi, outer_lo, rho);
+                const inner_a: f32 = if (!aa or rho >= inner_hi) 1.0 else smoothstep(inner_lo, inner_hi, rho);
+                self.disc_alpha[idx] = @intFromFloat(std.math.clamp(outer_a * inner_a * 255.0 + 0.5, 0, 255));
+
+                if (rho > 1e-4) {
+                    const rn = rho * inv_rd;
+                    const cphi = (nx * sheen_cx + ny * sheen_sy) / rho;
+                    const c2 = cphi * cphi;
+                    const c6 = c2 * c2 * c2;
+                    const w = c6 * c6 * 0.17 * smoothstep(0.10, 0.40, rn);
+                    self.disc_sheen[idx] = @intFromFloat(std.math.clamp(w * 256.0, 0, 255));
+                } else {
+                    self.disc_sheen[idx] = 0;
+                }
+            }
+        }
+    }
+
     pub fn rasterizeDiscRgba(
-        self: *const Renderer,
+        self: *Renderer,
         rgba: []u8,
         side: usize,
         box_w: f32,
@@ -468,74 +608,69 @@ pub const Renderer = struct {
         rh: f32,
         p: *const Params,
     ) void {
+        self.ensureDiscLut(side, box_w, box_h, rd, rh, p.aa);
+        if (self.disc_alpha.len != side * side) return;
+
         const ca = @cos(p.angle);
         const sa = @sin(p.angle);
         const inv_rd = 1.0 / rd;
         const inv_side = 1.0 / @as(f32, @floatFromInt(side));
-        const px_step = @max(box_w, box_h) * inv_side;
-        const aa_half = px_step * 0.5;
-        const outer_hi = rd + aa_half;
-        const outer_lo = rd - aa_half;
-        const outer_hi2 = outer_hi * outer_hi;
-        const inner_lo = @max(0.0, rh - aa_half);
-        const inner_hi = rh + aa_half;
-        const use_old = self.fade < 1.0 and self.old_img != null and self.old_tex.size == self.tex.size;
+        const dx_step = box_w * inv_side;
+        const du_dx = dx_step * ca * inv_rd;
+        const dv_dx = -dx_step * sa * inv_rd;
+        const nx0 = (0.5 * inv_side - 0.5) * box_w;
 
-        // cos(0.85) and sin(0.85) for fast specular sheen without atan2
-        const sheen_cx: f32 = 0.65998315;
-        const sheen_sy: f32 = 0.7512804;
+        const use_old = self.fade < 1.0 and self.old_img != null and self.old_tex.size == self.tex.size;
+        const fade_u: u32 = @intFromFloat(std.math.clamp(self.fade * 256.0, 0, 256));
+        const ifx_u: u32 = 256 - fade_u;
+        const do_sheen = p.sheen;
+        const do_aa = p.aa;
 
         for (0..side) |py| {
             const ny = ((@as(f32, @floatFromInt(py)) + 0.5) * inv_side - 0.5) * box_h;
-            const ny2 = ny * ny;
-            const row_off = py * side * 4;
+            var u = (nx0 * ca + ny * sa) * inv_rd;
+            var v = (-nx0 * sa + ny * ca) * inv_rd;
+            const lut_row = py * side;
+            const out_row = lut_row * 4;
             for (0..side) |px| {
-                const nx = ((@as(f32, @floatFromInt(px)) + 0.5) * inv_side - 0.5) * box_w;
-                const d2 = nx * nx + ny2;
-                const o = row_off + px * 4;
-                if (d2 >= outer_hi2) {
+                const a = self.disc_alpha[lut_row + px];
+                const o = out_row + px * 4;
+                if (a == 0) {
                     rgba[o] = 0;
                     rgba[o + 1] = 0;
                     rgba[o + 2] = 0;
                     rgba[o + 3] = 0;
-                    continue;
-                }
-                const rho = @sqrt(d2);
-                if (rho <= inner_lo) {
-                    rgba[o] = 0;
-                    rgba[o + 1] = 0;
-                    rgba[o + 2] = 0;
-                    rgba[o + 3] = 0;
+                    u += du_dx;
+                    v += dv_dx;
                     continue;
                 }
 
-                const outer_a = if (rho <= outer_lo) 1.0 else smoothstep(outer_hi, outer_lo, rho);
-                const inner_a = if (rho >= inner_hi) 1.0 else smoothstep(inner_lo, inner_hi, rho);
-                const alpha = outer_a * inner_a;
-
-                const u = (nx * ca + ny * sa) * inv_rd;
-                const v = (-nx * sa + ny * ca) * inv_rd;
-                var col = self.tex.sample(u, v);
-                if (use_old) col = mix3(self.old_tex.sample(u, v), col, self.fade);
-
-                const rn = rho * inv_rd;
-
-                if (p.sheen and rho > 1e-4) {
-                    const cphi = (nx * sheen_cx + ny * sheen_sy) / rho;
-                    const c2 = cphi * cphi;
-                    const c6 = c2 * c2 * c2;
-                    const w = c6 * c6 * 0.17 * smoothstep(0.10, 0.40, rn);
+                var col = if (do_aa) self.tex.sampleBilinear(u, v) else self.tex.sampleNearest(u, v);
+                if (use_old) {
+                    const ocol = if (do_aa) self.old_tex.sampleBilinear(u, v) else self.old_tex.sampleNearest(u, v);
                     col = .{
-                        col[0] + (255.0 - col[0]) * w,
-                        col[1] + (255.0 - col[1]) * w,
-                        col[2] + (255.0 - col[2]) * w,
+                        @intCast((ifx_u * ocol[0] + fade_u * col[0] + 128) >> 8),
+                        @intCast((ifx_u * ocol[1] + fade_u * col[1] + 128) >> 8),
+                        @intCast((ifx_u * ocol[2] + fade_u * col[2] + 128) >> 8),
                     };
                 }
+                if (do_sheen) {
+                    const sw: u32 = self.disc_sheen[lut_row + px];
+                    if (sw > 0) {
+                        col = .{
+                            @intCast(col[0] + (((255 - @as(u32, col[0])) * sw) >> 8)),
+                            @intCast(col[1] + (((255 - @as(u32, col[1])) * sw) >> 8)),
+                            @intCast(col[2] + (((255 - @as(u32, col[2])) * sw) >> 8)),
+                        };
+                    }
+                }
 
-                rgba[o] = @intFromFloat(std.math.clamp(col[0], 0, 255));
-                rgba[o + 1] = @intFromFloat(std.math.clamp(col[1], 0, 255));
-                rgba[o + 2] = @intFromFloat(std.math.clamp(col[2], 0, 255));
-                rgba[o + 3] = @intFromFloat(std.math.clamp(alpha * 255.0, 0, 255));
+                rgba[o] = col[0];
+                rgba[o + 1] = col[1];
+                rgba[o + 2] = col[2];
+                rgba[o + 3] = a;
+                u += du_dx;
+                v += dv_dx;
             }
         }
     }
@@ -855,6 +990,7 @@ pub const Renderer = struct {
                 " g       bagliore cassa on/off",
                 " a       aurora sub-bass on/off",
                 " c       colori fx cover/freq",
+                " d / x   risoluzione / AA disco",
                 " l       riflessi on/off",
                 " b       sfondo tinta/nero",
                 " i       inverti bassi su/giù",
