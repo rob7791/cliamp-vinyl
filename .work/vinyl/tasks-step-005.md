@@ -1,7 +1,7 @@
 # Step 005 — Packaging, test end-to-end e documentazione
 
 **Plan phase:** Phase 5: Packaging & Verification
-**Status:** in progress
+**Status:** completed
 **Prerequisites:** Step 003 e Step 004 completati
 
 ## Goal
@@ -22,12 +22,12 @@ Aggiungere installazione in ~/.local/bin/vinyl, eseguire test end-to-end (60+ FP
   - mode: integrated
   - mode_reason: Condivide la codebase Zig in src/ o esegue verifica integrata
   - result: E2E PTY+Kitty+Braille verificato: 55.7-60.0 fps direct (30.6 MB/s) e 60.0 fps file (0.13 MB/s), resize SIGWINCH 160x50->140x44, pausa space, auto-start/stop cliamp --daemon, cleanup Kitty a=d,d=A e /tmp/vinyl-kitty-*; ispezionate screenshot PNG composite
-- [ ] s5-readme | Scrivere README.md con installazione, setup plugin cliamp, opzioni CLI e scorciatoie
+- [x] s5-readme | Scrivere README.md con installazione, setup plugin cliamp, opzioni CLI e scorciatoie
   - tags: docs
   - deps: s5-e2e
   - mode: isolated
   - mode_reason: Scrive solo README.md a fine implementazione
-  - claimed_by: sub-docs
+  - result: Creato README.md con panoramica, requisiti, build/install-local, setup plugin, opzioni CLI e scorciatoie verificate
 
 ## Completion criteria
 
