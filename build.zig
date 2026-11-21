@@ -27,5 +27,6 @@ pub fn build(b: *std.Build) void {
     inst_cmd.addArtifactArg(exe);
     inst_cmd.addArg(local_dest);
     const install_local = b.step("install-local", "Install vinyl binary to ~/.local/bin/vinyl");
+    install_local.dependOn(b.getInstallStep());
     install_local.dependOn(&inst_cmd.step);
 }

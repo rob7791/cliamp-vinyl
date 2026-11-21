@@ -20,6 +20,7 @@ const usage =
     \\
     \\Opzioni:
     \\  --fps N             frame al secondo (default 60, max 240)
+    \\  --rpm F             velocità di rotazione disco in RPM (default 33.333, 0..200)
     \\  --bars N            barre per canale (default 48)
     \\  --aspect F          rapporto altezza/larghezza cella (default: auto, o 2.1)
     \\  --source NAME       sorgente PulseAudio/PipeWire per cava (default auto)
@@ -39,6 +40,7 @@ const bridge_lua = @embedFile("vinyl-art-bridge.lua");
 
 const Opts = struct {
     fps: u32 = 60,
+    rpm: f32 = 33.333,
     bars: usize = 48,
     aspect: ?f32 = null,
     source: ?[]const u8 = null,
@@ -75,6 +77,9 @@ pub fn main() !void {
         } else if (eq(u8, a, "--fps") and i + 1 < argv.len) {
             i += 1;
             opts.fps = std.math.clamp(try std.fmt.parseInt(u32, argv[i], 10), 5, 240);
+        } else if (eq(u8, a, "--rpm") and i + 1 < argv.len) {
+            i += 1;
+            opts.rpm = std.math.clamp(try std.fmt.parseFloat(f32, argv[i]), 0.0, 200.0);
         } else if (eq(u8, a, "--bars") and i + 1 < argv.len) {
             i += 1;
             opts.bars = std.math.clamp(try std.fmt.parseInt(usize, argv[i], 10), 8, 128);
@@ -181,7 +186,9 @@ pub fn main() !void {
     var last = next_frame;
     var angle: f32 = 0;
     var spin: f32 = 0; // rad/s
-    const rpm_speed: f32 = 33.333 / 60.0 * std.math.tau;
+    var rpm: f32 = opts.rpm;
+    var rpm_hud_timer: f32 = 0;
+    const rpm_presets = [_]f32{ 33.333, 45.0, 78.0, 0.0, 16.666 };
     var sheen = opts.sheen;
     var bass_top = opts.bass_top;
     var show_fps = false;
@@ -228,6 +235,37 @@ pub fn main() !void {
                 'i' => bass_top = !bass_top,
                 'f' => show_fps = !show_fps,
                 'b' => bg_mode = if (bg_mode == .tint) .black else .tint,
+                '[' => {
+                    rpm = @max(0.0, rpm - 5.0);
+                    rpm_hud_timer = 2.0;
+                },
+                ']' => {
+                    rpm = @min(200.0, rpm + 5.0);
+                    rpm_hud_timer = 2.0;
+                },
+                '{' => {
+                    rpm = @max(0.0, rpm - 1.0);
+                    rpm_hud_timer = 2.0;
+                },
+                '}' => {
+                    rpm = @min(200.0, rpm + 1.0);
+                    rpm_hud_timer = 2.0;
+                },
+                'v' => {
+                    var next_idx: usize = 0;
+                    for (rpm_presets, 0..) |preset, idx| {
+                        if (@abs(rpm - preset) < 0.5) {
+                            next_idx = (idx + 1) % rpm_presets.len;
+                            break;
+                        }
+                    }
+                    rpm = rpm_presets[next_idx];
+                    rpm_hud_timer = 2.0;
+                },
+                '0' => {
+                    rpm = 33.333;
+                    rpm_hud_timer = 2.0;
+                },
                 '?', 'h' => show_help = !show_help,
                 else => {},
             }
@@ -262,6 +300,8 @@ pub fn main() !void {
         if (snap.duration > 0) pos = @min(pos, snap.duration);
 
         // turntable inertia
+        if (rpm_hud_timer > 0) rpm_hud_timer = @max(0.0, rpm_hud_timer - dt);
+        const rpm_speed: f32 = rpm / 60.0 * std.math.tau;
         const target: f32 = if (snap.state == .playing) rpm_speed else 0;
         spin += (target - spin) * @min(1.0, dt * 2.5);
         angle = @mod(angle + spin * dt, std.math.tau);
@@ -281,6 +321,8 @@ pub fn main() !void {
             .show_fps = show_fps,
             .show_help = show_help,
             .fps = fps_val,
+            .rpm = rpm,
+            .show_rpm = rpm_hud_timer > 0,
             .bg_mode = bg_mode,
             .cava_ok = cava.ok,
             .kitty_enc = if (use_kitty) &kitty_enc else null,

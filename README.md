@@ -95,6 +95,7 @@ Tutti gli argomenti non riconosciuti da `vinyl` vengono inoltrati direttamente a
 | Opzione | Descrizione |
 | --- | --- |
 | `--fps N` | Frame al secondo (intervallo `5`–`240`, default `60`) |
+| `--rpm F` | Velocità di rotazione iniziale del disco in RPM (intervallo `0`–`200`, default `33.333`) |
 | `--bars N` | Numero di barre per canale per `cava` (intervallo `8`–`128`, default `48`) |
 | `--aspect F` | Rapporto altezza/larghezza delle celle (intervallo `1.0`–`4.0`; default rilevamento automatico o `2.1`) |
 | `--source NAME` | Sorgente audio PulseAudio/PipeWire per `cava` (default `auto`) |
@@ -117,9 +118,13 @@ Tutti gli argomenti non riconosciuti da `vinyl` vengono inoltrati direttamente a
 | `←` / `→` | Seek indietro / avanti di 5 secondi |
 | `↑` / `↓` oppure `+` (`=`) / `-` | Regola il volume di ±1 dB |
 | `s` / `r` | Attiva/disattiva `shuffle` / cambia modalità `repeat` |
+| `[` / `]` | Diminuisce / aumenta la velocità di rotazione del disco di ±5 RPM (`0`–`200`) |
+| `{` / `}` | Regolazione fine della velocità di rotazione di ±1 RPM |
+| `v` | Cicla i preset vinile (`33.3`, `45`, `78`, `0`, `16.7` RPM) |
+| `0` | Ripristina la velocità predefinita (`33.3` RPM) |
 | `l` | Attiva/disattiva i riflessi del vinile |
 | `b` | Alterna lo sfondo tra tinta derivata dalla copertina e nero |
 | `i` | Inverte l'orientamento delle frequenze (bassi in alto / in basso) |
-| `f` | Mostra/nasconde il contatore FPS |
+| `f` | Mostra/nasconde il contatore FPS e RPM |
 | `?` / `h` | Mostra/nasconde la legenda delle scorciatoie |
 | `q` / `Q` / `Ctrl+C` | Esci da `vinyl` |

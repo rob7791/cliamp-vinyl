@@ -91,6 +91,8 @@ pub const Params = struct {
     show_fps: bool,
     show_help: bool,
     fps: f32,
+    rpm: f32 = 33.333,
+    show_rpm: bool = false,
     bg_mode: BgMode,
     cava_ok: bool,
     kitty_enc: ?*kitty.Encoder = null,
@@ -459,13 +461,17 @@ pub const Renderer = struct {
         const warn_col = Rgb{ .r = 250, .g = 200, .b = 90 };
         var buf: [1024]u8 = undefined;
 
+        const top_hud = p.show_fps or p.show_rpm;
         if (p.show_fps) {
-            const t = std.fmt.bufPrint(&buf, " {d:.1} fps ", .{p.fps}) catch "";
+            const t = std.fmt.bufPrint(&buf, " {d:.1} fps · {d:.1} rpm ", .{ p.fps, p.rpm }) catch "";
             _ = s.text(0, 0, t, faint, false);
+        } else if (p.show_rpm) {
+            const t = std.fmt.bufPrint(&buf, " {d:.1} rpm ", .{p.rpm}) catch "";
+            _ = s.text(0, 0, t, light, true);
         }
         if (p.kitty_warn) {
             const t = " Kitty graphics non supportato: solo visualizer Braille (--force-kitty) ";
-            _ = s.text(0, if (p.show_fps) 1 else 0, t, warn_col, true);
+            _ = s.text(0, if (top_hud) 1 else 0, t, warn_col, true);
         }
         if (!p.cava_ok) {
             const t = " cava non disponibile ";
@@ -478,20 +484,22 @@ pub const Renderer = struct {
                 " ← / →   seek ∓5s",
                 " ↑ / ↓   volume ±1dB",
                 " s / r   shuffle / repeat",
+                " [ / ]   spin ∓5 RPM ({/} ∓1)",
+                " v / 0   preset RPM / reset",
                 " l       riflessi on/off",
                 " b       sfondo tinta/nero",
                 " i       inverti bassi su/giù",
-                " f       mostra fps",
+                " f       mostra fps / rpm",
                 " q       esci",
             };
-            const help_w: usize = 30;
+            const help_w: usize = 31;
             const col_start: usize = if (disc_cols > 0 and cols >= disc_col0 + disc_cols + help_w + 1)
                 cols - help_w - 1
             else if (disc_cols > 0 and disc_col0 >= help_w + 1)
                 1
             else
                 0;
-            const row_start: usize = if (p.kitty_warn) 2 else if (p.show_fps) 1 else 0;
+            const row_start: usize = if (p.kitty_warn) 2 else if (top_hud) 1 else 0;
             for (lines, 0..) |l, i| _ = s.text(col_start, row_start + i, l, light, false);
         }
 
