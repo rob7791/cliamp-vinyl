@@ -98,6 +98,7 @@ pub const Params = struct {
     show_rpm: bool = false,
     peak_mode: PeakMode = .path,
     glow: bool = true,
+    aurora: bool = true,
     hud_msg: []const u8 = "",
     bg_mode: BgMode,
     cava_ok: bool,
@@ -121,6 +122,9 @@ pub const Renderer = struct {
     peak: [ANG]f32 = [_]f32{0} ** ANG,
     kick_avg: f32 = 0,
     kick_glow: f32 = 0,
+    sub_l: f32 = 0,
+    sub_r: f32 = 0,
+    aurora_phase: f32 = 0,
     tex_size_for: usize = 0,
     img_gen: u64 = 0,
 
@@ -197,12 +201,21 @@ pub const Renderer = struct {
         var high_l: f32 = 0;
         var high_r: f32 = 0;
         var high_w: f32 = 0;
-        // Kick drum band: 100Hz–300Hz on cava's 40Hz–16000Hz log scale => u in [0.153, 0.336]
+        // Sub-bass (20–80 Hz) & kick drum (100–300 Hz) on cava's 20Hz–16000Hz log scale
+        // 20–80 Hz => u in [0.0, 0.207]; 100–300 Hz => u in [0.241, 0.405]
+        var sub_l_sum: f32 = 0;
+        var sub_r_sum: f32 = 0;
+        var sub_cnt: f32 = 0;
         var kick_sum: f32 = 0;
         var kick_cnt: f32 = 0;
         for (0..n) |i| {
             const u = if (n > 1) @as(f32, @floatFromInt(i)) / nf else 0.0;
-            if (u >= 0.14 and u <= 0.35) {
+            if (u <= 0.20) {
+                sub_l_sum += raw_l[i];
+                sub_r_sum += raw_r[i];
+                sub_cnt += 1.0;
+            }
+            if (u >= 0.22 and u <= 0.41) {
                 kick_sum += 0.5 * (raw_l[i] + raw_r[i]);
                 kick_cnt += 1.0;
             }
@@ -248,6 +261,24 @@ pub const Renderer = struct {
             self.kick_glow *= @exp(-p.dt * 6.5);
         }
         self.kick_glow = std.math.clamp(self.kick_glow, 0, 1.0);
+
+        // Sub-bass storm aurora envelope (20–80 Hz, per-channel L/R rumble)
+        const sl_raw: f32 = if (sub_cnt > 0) std.math.clamp(sub_l_sum / sub_cnt, 0, 1) else 0;
+        const sr_raw: f32 = if (sub_cnt > 0) std.math.clamp(sub_r_sum / sub_cnt, 0, 1) else 0;
+        if (sl_raw > self.sub_l) {
+            self.sub_l += (sl_raw - self.sub_l) * @min(1.0, p.dt * 26.0);
+        } else {
+            self.sub_l *= @exp(-p.dt * 4.2);
+        }
+        if (sr_raw > self.sub_r) {
+            self.sub_r += (sr_raw - self.sub_r) * @min(1.0, p.dt * 26.0);
+        } else {
+            self.sub_r *= @exp(-p.dt * 4.2);
+        }
+        self.sub_l = std.math.clamp(self.sub_l, 0, 1.0);
+        self.sub_r = std.math.clamp(self.sub_r, 0, 1.0);
+        const sub_avg = 0.5 * (self.sub_l + self.sub_r);
+        self.aurora_phase = @mod(self.aurora_phase + p.dt * (0.9 + 2.8 * sub_avg), TAU * 16.0);
 
         for (0..ANG) |a| {
             const th = (@as(f32, @floatFromInt(a)) + 0.5) / ANG * TAU;
@@ -348,6 +379,9 @@ pub const Renderer = struct {
             self.updateRing(&p);
             if (p.glow and self.kick_glow > 0.004) {
                 self.drawGlow(s, cx, cy, rd, rmax, vis_rows, k, pal.c1, pal.c2, bgf);
+            }
+            if (p.aurora and (self.sub_l > 0.004 or self.sub_r > 0.004)) {
+                self.drawAurora(s, vis_rows);
             }
             self.drawRing(s, &p, cx, cy, rd, r0, ring_h, ring_min, vis_rows, pal.c1, pal.c2, bgf);
 
@@ -524,6 +558,56 @@ pub const Renderer = struct {
         }
     }
 
+    /// Darkening storm-like aurora creeping inward from left & right screen edges on 20–80 Hz sub-bass.
+    fn drawAurora(self: *const Renderer, s: *Screen, vis_rows: usize) void {
+        if (s.cols < 4 or vis_rows < 2) return;
+        const cols_f: f32 = @floatFromInt(s.cols);
+        const rows_f: f32 = @floatFromInt(vis_rows);
+        const max_span = @max(4.0, cols_f * 0.44);
+        const inv_span = 1.0 / max_span;
+        const phase = self.aurora_phase;
+
+        for (0..vis_rows) |r| {
+            const ny = (@as(f32, @floatFromInt(r)) + 0.5) / rows_f;
+            const sway_l = 0.5 + 0.30 * @sin(ny * 5.2 + phase * 1.1) + 0.20 * @sin(ny * 11.7 - phase * 1.9);
+            const sway_r = 0.5 + 0.30 * @sin(ny * 5.6 - phase * 1.0 + 1.7) + 0.20 * @sin(ny * 11.1 + phase * 1.7);
+            const reach_l = (0.28 + 0.72 * self.sub_l) * (0.62 + 0.58 * sway_l);
+            const reach_r = (0.28 + 0.72 * self.sub_r) * (0.62 + 0.58 * sway_r);
+            const vert_ripple_l = @sin(ny * 4.5 + phase) * 2.0;
+            const vert_ripple_r = @sin(ny * 4.9 - phase * 1.1 + 1.3) * 2.0;
+
+            for (0..s.cols) |c| {
+                const edge_l = @as(f32, @floatFromInt(c)) * inv_span;
+                const edge_r = @as(f32, @floatFromInt(s.cols - 1 - c)) * inv_span;
+                if (edge_l > reach_l and edge_r > reach_r) continue;
+
+                var dark: f32 = 0;
+                if (self.sub_l > 0.004 and edge_l < reach_l) {
+                    const mask = smoothstep(reach_l, 0.0, edge_l);
+                    const ribbon = 0.65 + 0.35 * @sin(edge_l * 14.0 - phase * 2.4 + vert_ripple_l);
+                    dark = @max(dark, self.sub_l * mask * ribbon);
+                }
+                if (self.sub_r > 0.004 and edge_r < reach_r) {
+                    const mask = smoothstep(reach_r, 0.0, edge_r);
+                    const ribbon = 0.65 + 0.35 * @sin(edge_r * 14.0 - phase * 2.2 + vert_ripple_r);
+                    dark = @max(dark, self.sub_r * mask * ribbon);
+                }
+                const amt = std.math.clamp(dark * 0.94, 0.0, 0.95);
+                if (amt <= 0.005) continue;
+
+                const scale = 1.0 - amt;
+                const cell = s.at(c, r);
+                const bg = Rgb{
+                    .r = @intFromFloat(@as(f32, @floatFromInt(cell.bg.r)) * scale),
+                    .g = @intFromFloat(@as(f32, @floatFromInt(cell.bg.g)) * scale),
+                    .b = @intFromFloat(@as(f32, @floatFromInt(cell.bg.b)) * scale),
+                };
+                cell.bg = bg;
+                if (cell.cp == ' ') cell.fg = bg;
+            }
+        }
+    }
+
     fn drawRing(self: *Renderer, s: *Screen, p: *const Params, cx: f32, cy: f32, rd: f32, r0: f32, ring_h: f32, ring_min: f32, vis_rows: usize, c1: [3]f32, c2: [3]f32, bgf: [3]f32) void {
         _ = bgf;
         const k = p.aspect;
@@ -687,6 +771,7 @@ pub const Renderer = struct {
                 " v / 0   preset RPM / reset",
                 " w       path 1:1 / peak",
                 " g       bagliore cassa on/off",
+                " a       aurora sub-bass on/off",
                 " l       riflessi on/off",
                 " b       sfondo tinta/nero",
                 " i       inverti bassi su/giù",
@@ -1025,8 +1110,8 @@ test "kick sidechain glow reacts stronger to sudden 100-300Hz hits and radiates 
     var snap = cliamp.Snapshot{ .connected = true, .state = .playing };
     const zero_bars = [_]f32{0.0} ** 48;
     var kick_bars = [_]f32{0.0} ** 48;
-    // 100-300Hz maps to u in [0.14, 0.35] => indices ~7..16 for 48 bars
-    for (7..17) |i| kick_bars[i] = 0.95;
+    // 100-300Hz maps to u in [0.22, 0.41] on 20-16000Hz log scale => indices ~11..19 for 48 bars
+    for (11..20) |i| kick_bars[i] = 0.95;
 
     // Sudden kick hit from silence
     r.render(&s, .{
@@ -1080,4 +1165,76 @@ test "kick sidechain glow reacts stronger to sudden 100-300Hz hits and radiates 
         });
     }
     try std.testing.expect(r.kick_glow < sudden_glow);
+}
+
+test "sub-bass storm aurora darkens screen edges on 20-80Hz rumble" {
+    const alloc = std.testing.allocator;
+    var r = Renderer{ .alloc = alloc };
+    defer r.deinit();
+    r.setImage(try art.placeholder(alloc, 19));
+
+    var s = Screen.init(alloc);
+    defer s.deinit();
+    try s.resize(120, 40);
+
+    var snap = cliamp.Snapshot{ .connected = true, .state = .playing };
+    const zero_bars = [_]f32{0.0} ** 48;
+    var sub_bars = [_]f32{0.0} ** 48;
+    for (0..10) |i| sub_bars[i] = 1.0; // 20-80Hz sub-bass
+
+    // Baseline background without aurora
+    r.render(&s, .{
+        .aspect = 2.0,
+        .angle = 0.0,
+        .dt = 1.0 / 60.0,
+        .left = &zero_bars,
+        .right = &zero_bars,
+        .raw_left = &zero_bars,
+        .raw_right = &zero_bars,
+        .snap = &snap,
+        .position = 0,
+        .sheen = false,
+        .bass_top = false,
+        .show_fps = false,
+        .show_help = false,
+        .fps = 60.0,
+        .peak_mode = .path,
+        .glow = false,
+        .aurora = true,
+        .bg_mode = .tint,
+        .cava_ok = true,
+    });
+    const base_l = s.at(0, 18).bg;
+    const base_r = s.at(119, 18).bg;
+
+    // Pulse sub-bass for several frames and verify both side edges darken
+    for (0..6) |_| {
+        r.render(&s, .{
+            .aspect = 2.0,
+            .angle = 0.0,
+            .dt = 1.0 / 60.0,
+            .left = &zero_bars,
+            .right = &zero_bars,
+            .raw_left = &sub_bars,
+            .raw_right = &sub_bars,
+            .snap = &snap,
+            .position = 0,
+            .sheen = false,
+            .bass_top = false,
+            .show_fps = false,
+            .show_help = false,
+            .fps = 60.0,
+            .peak_mode = .path,
+            .glow = false,
+            .aurora = true,
+            .bg_mode = .tint,
+            .cava_ok = true,
+        });
+    }
+    const dark_l = s.at(0, 18).bg;
+    const dark_r = s.at(119, 18).bg;
+    try std.testing.expect(r.sub_l > 0.5 and r.sub_r > 0.5);
+    try std.testing.expect(dark_l.r <= base_l.r and dark_l.g <= base_l.g and dark_l.b <= base_l.b);
+    try std.testing.expect(dark_l.r < base_l.r or dark_l.g < base_l.g or dark_l.b < base_l.b);
+    try std.testing.expect(dark_r.r < base_r.r or dark_r.g < base_r.g or dark_r.b < base_r.b);
 }

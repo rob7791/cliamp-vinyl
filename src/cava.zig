@@ -38,7 +38,7 @@ pub const Cava = struct {
             \\bars = {d}
             \\autosens = 1
             \\sleep_timer = 0
-            \\lower_cutoff_freq = 40
+            \\lower_cutoff_freq = 20
             \\higher_cutoff_freq = 16000
             \\[input]
             \\method = pulse
