@@ -348,12 +348,6 @@ pub const Renderer = struct {
                 if (use_old) col = mix3(self.old_tex.sample(u, v), col, self.fade);
 
                 const rn = rho * inv_rd;
-                // rim bevel, spindle collar shadow, subtle vinyl micro-grooves
-                var shade: f32 = 1.0;
-                if (rn > 0.965) shade *= mix1(1.0, 0.68, smoothstep(0.965, 1.0, rn));
-                if (rho < rh * 1.9) shade *= mix1(0.52, 1.0, smoothstep(rh, rh * 1.9, rho));
-                shade *= 1.0 - 0.032 * (0.5 + 0.5 * @sin(rn * 190.0));
-                col = .{ col[0] * shade, col[1] * shade, col[2] * shade };
 
                 if (p.sheen and rho > 1e-4) {
                     const cphi = (nx * sheen_cx + ny * sheen_sy) / rho;
