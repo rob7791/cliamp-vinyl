@@ -252,12 +252,21 @@ pub const Renderer = struct {
             const env_mid = 0.25 + 0.75 * std.math.pow(f32, s_mid, 1.4);
             const env_high = 0.25 + 0.75 * std.math.pow(f32, s_high, 1.4);
 
-            const raw_here = if (right_side) linSample(raw_r, fpos) else linSample(raw_l, fpos);
+            const raw_here = std.math.clamp(if (right_side) linSample(raw_r, fpos) else linSample(raw_l, fpos), 0, 1);
             const deform = 0.88 + 0.22 * raw_here;
 
-            self.path_low[a] = std.math.clamp(el * env_low * deform * 1.15, 0, 1.0);
-            self.path_mid[a] = std.math.clamp(em * env_mid * deform * 1.15, 0, 1.0);
-            self.path_high[a] = std.math.clamp(eh * env_high * deform * 1.15, 0, 1.0);
+            const ell_low = el * env_low * deform * 1.15;
+            const ell_mid = em * env_mid * deform * 1.15;
+            const ell_high = eh * env_high * deform * 1.15;
+
+            // Union with direct 1:1 raw frequency peaks, partitioned by frequency zone (follows bass_top)
+            const mask_low = 1.0 - smoothstep(0.32, 0.48, u);
+            const mask_mid = smoothstep(0.22, 0.36, u) * (1.0 - smoothstep(0.64, 0.78, u));
+            const mask_high = smoothstep(0.52, 0.68, u);
+
+            self.path_low[a] = std.math.clamp(@max(ell_low, raw_here * mask_low), 0, 1.0);
+            self.path_mid[a] = std.math.clamp(@max(ell_mid, raw_here * mask_mid), 0, 1.0);
+            self.path_high[a] = std.math.clamp(@max(ell_high, raw_here * mask_high), 0, 1.0);
         }
     }
 
