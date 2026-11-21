@@ -13,10 +13,12 @@ const usage =
     \\
     \\Uso: vinyl [opzioni] [argomenti cliamp...]
     \\
-    \\Se cliamp non è già in esecuzione, vinyl avvia `cliamp --daemon` passando
-    \\gli argomenti non riconosciuti (es. `vinyl --playlist Lofi --auto-play`,
-    \\`vinyl ~/Music/album --auto-play`) e lo ferma all'uscita.
-    \\Se cliamp è già in esecuzione (TUI o demone) vinyl si collega a quello.
+    \\Senza argomenti cliamp, vinyl si collega al socket IPC di un'istanza `cliamp`
+    \\già in esecuzione (o resta in attesa finché non avvii `cliamp`), evitando di
+    \\occupare il socket con un demone vuoto.
+    \\Se passi argomenti per cliamp (es. `vinyl --playlist Lofi --auto-play`,
+    \\`vinyl ~/Music/album --auto-play`) oppure `--daemon`, e cliamp non è già attivo,
+    \\vinyl avvia `cliamp --daemon` e lo ferma all'uscita.
     \\
     \\Opzioni:
     \\  --fps N             frame al secondo (default: auto da monitor o 60, max 240)
@@ -30,6 +32,7 @@ const usage =
     \\  --bass-top          bassi in alto invece che in basso
     \\  --no-sheen          disattiva i riflessi del vinile
     \\  --keep-daemon       non fermare il demone lanciato da vinyl all'uscita
+    \\  --daemon            avvia `cliamp --daemon` anche senza argomenti cliamp
     \\  --no-daemon         non lanciare mai cliamp, attendi solo il socket
     \\  --install-plugin    installa e approva il plugin Lua bridge per cliamp
     \\  -h, --help          questo aiuto
@@ -50,6 +53,7 @@ const Opts = struct {
     bass_top: bool = false,
     sheen: bool = true,
     keep_daemon: bool = false,
+    force_daemon: bool = false,
     no_daemon: bool = false,
     passthrough: std.ArrayList([]const u8) = .empty,
 };
@@ -109,6 +113,8 @@ pub fn main() !void {
             opts.sheen = false;
         } else if (eq(u8, a, "--keep-daemon")) {
             opts.keep_daemon = true;
+        } else if (eq(u8, a, "--daemon")) {
+            opts.force_daemon = true;
         } else if (eq(u8, a, "--no-daemon")) {
             opts.no_daemon = true;
         } else {
@@ -117,8 +123,11 @@ pub fn main() !void {
     }
 
     // --- cliamp daemon -------------------------------------------------------
+    // Only auto-spawn `cliamp --daemon` when passthrough args or `--daemon` were given;
+    // otherwise wait for an existing/upcoming `cliamp` TUI without stealing cliamp.sock.
     var daemon: ?std.process.Child = null;
-    if (!opts.no_daemon and !cliamp.isAlive()) {
+    const want_daemon = !opts.no_daemon and (opts.force_daemon or opts.passthrough.items.len > 0);
+    if (want_daemon and !cliamp.isAlive()) {
         var args: std.ArrayList([]const u8) = .empty;
         defer args.deinit(gpa);
         try args.appendSlice(gpa, &.{ "cliamp", "--daemon" });

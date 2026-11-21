@@ -106,6 +106,7 @@ Tutti gli argomenti non riconosciuti da `vinyl` vengono inoltrati direttamente a
 | `--bass-top` | Posiziona le frequenze basse nella parte superiore dell'anello invece che in basso |
 | `--no-sheen` | Disattiva i riflessi speculari sul vinile |
 | `--keep-daemon` | Non arresta il demone `cliamp` avviato da `vinyl` all'uscita |
+| `--daemon` | Avvia `cliamp --daemon` anche senza argomenti cliamp (di default senza argomenti `vinyl` attende `cliamp` senza occupare il socket) |
 | `--no-daemon` | Non avvia mai `cliamp --daemon`, attende solo il socket IPC esistente |
 | `--install-plugin` | Installa `vinyl-art-bridge.lua` nella cartella plugin di `cliamp` ed esegue `cliamp plugins trust vinyl-art-bridge` |
 | `-h`, `--help` | Mostra il messaggio di aiuto ed esce |
