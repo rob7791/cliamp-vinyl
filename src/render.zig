@@ -651,8 +651,10 @@ pub const Renderer = struct {
                 var bits: u8 = 0;
                 var acc = [3]f32{ 0, 0, 0 };
                 var lit: f32 = 0;
-                // Layer priority per cell: 3 = bass (skyblue), 2 = mid (limegreen), 1 = high (crimson), 0 = band
+                // Layer priority per cell for ellipsis: 3 = bass (skyblue), 2 = mid (limegreen), 1 = high (crimson), 0 = band
                 var cell_layer: u8 = 0;
+                var path_acc = [3]f32{ 0, 0, 0 };
+                var path_lit: f32 = 0;
                 for (0..4) |j| {
                     for (0..2) |i| {
                         const dx = @as(f32, @floatFromInt(c)) + 0.25 + 0.5 * @as(f32, @floatFromInt(i)) - cx;
@@ -666,6 +668,7 @@ pub const Renderer = struct {
                         const top = r0 + ring_min + v * ring_h;
 
                         var hit_layer: u8 = 0;
+                        var hit_path = false;
                         if (p.peak_mode == .ellipsis) {
                             const r_low = r0 + ring_min + self.path_low[idx] * ring_h;
                             const r_mid = r0 + ring_min + self.path_mid[idx] * ring_h;
@@ -707,12 +710,20 @@ pub const Renderer = struct {
                                 const right_side = th < std.math.pi;
                                 const t = if (right_side) th / std.math.pi else (TAU - th) / std.math.pi;
                                 const u = if (p.bass_top) t else 1.0 - t;
-                                hit_layer = if (u < 0.34) 3 else if (u < 0.67) 2 else 1;
+                                const pc = pathBandColor(u);
+                                path_acc[0] += pc[0];
+                                path_acc[1] += pc[1];
+                                path_acc[2] += pc[2];
+                                path_lit += 1;
+                                hit_path = true;
                             }
                         }
 
                         var col: [3]f32 = undefined;
-                        if (hit_layer > 0) {
+                        if (hit_path) {
+                            bits |= dot_bits[j][i];
+                            continue;
+                        } else if (hit_layer > 0) {
                             bits |= dot_bits[j][i];
                             cell_layer = @max(cell_layer, hit_layer);
                             continue;
@@ -738,7 +749,9 @@ pub const Renderer = struct {
                 if (bits == 0) continue;
                 const cell = s.at(c, r);
                 cell.cp = 0x2800 + @as(u21, bits);
-                cell.fg = switch (cell_layer) {
+                cell.fg = if (path_lit > 0)
+                    toRgb(.{ path_acc[0] / path_lit, path_acc[1] / path_lit, path_acc[2] / path_lit })
+                else switch (cell_layer) {
                     3 => skyblue,
                     2 => limegreen,
                     1 => crimson,
@@ -925,6 +938,18 @@ fn smoothstep(e0: f32, e1: f32, x: f32) f32 {
     if (e0 == e1) return if (x >= e1) 1 else 0;
     const t = std.math.clamp((x - e0) / (e1 - e0), 0, 1);
     return t * t * (3 - 2 * t);
+}
+
+/// Smooth color blend across the 3 frequency bands (full color in each band's core, smooth crossover between).
+fn pathBandColor(u: f32) [3]f32 {
+    const sky = [3]f32{ 135, 206, 235 };
+    const lime = [3]f32{ 50, 205, 50 };
+    const crim = [3]f32{ 220, 20, 60 };
+    if (u <= 0.26) return sky;
+    if (u < 0.44) return mix3(sky, lime, smoothstep(0.26, 0.44, u));
+    if (u <= 0.56) return lime;
+    if (u < 0.74) return mix3(lime, crim, smoothstep(0.56, 0.74, u));
+    return crim;
 }
 
 inline fn mix1(a: f32, b: f32, t: f32) f32 {
