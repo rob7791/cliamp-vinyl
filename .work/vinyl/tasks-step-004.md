@@ -1,7 +1,7 @@
 # Step 004 — Cover art completa e plugin Lua bridge per cliamp
 
 **Plan phase:** Phase 4: Cover Art & Bridge
-**Status:** not started
+**Status:** in progress
 **Prerequisites:** Step 002 (caricamento texture sul disco Kitty)
 
 ## Goal
@@ -10,14 +10,21 @@ Implementare e integrare il plugin Lua bridge per cliamp per risolvere le cover 
 
 ## Checklist
 
-- [ ] s4-lua-plugin | Creare il plugin Lua bridge per cliamp che pubblica album_art_url su /tmp/cliamp-vinyl-art.txt
+- [x] s4-lua-plugin | Creare il plugin Lua bridge per cliamp che pubblica album_art_url su /tmp/cliamp-vinyl-art.txt
   - tags: cliamp, art, plugin
+  - mode: isolated
+  - mode_reason: Crea solo plugins/vinyl-art-bridge.lua senza toccare src/*.zig
+  - result: Creato plugins/vinyl-art-bridge.lua per esportare path e album_art_url su /tmp/cliamp-vinyl-art.txt
 - [ ] s4-plugin-install | Aggiungere comando o script di installazione e trust del plugin Lua bridge per cliamp
   - tags: cliamp, plugin, ux
   - deps: s4-lua-plugin
+  - mode: integrated
+  - mode_reason: Condivide la codebase Zig in src/ o esegue verifica integrata
 - [ ] s4-art-verify | Verificare caricamento cover art per tutte le sorgenti (locale embedded/sidecar, bridge remoto, MPRIS, placeholder)
   - tags: art, verify
   - deps: s4-plugin-install, s2-frame-loop
+  - mode: integrated
+  - mode_reason: Condivide la codebase Zig in src/ o esegue verifica integrata
 
 ## Completion criteria
 

@@ -13,12 +13,18 @@ Allineare geometricamente il disco Kitty in pixel con il margine e il visualizer
 - [ ] s3-align | Allineare geometria pixel del disco Kitty con margine e anello Braille stereo anche al resize
   - tags: render, visualizer
   - deps: s2-frame-loop
+  - mode: integrated
+  - mode_reason: Condivide la codebase Zig in src/ o esegue verifica integrata
 - [ ] s3-vis-polish | Rifinire resa estetica del visualizer circolare continuo L/R (smoothing, peak hold, palette, sfondo)
   - tags: render, visualizer
   - deps: s3-align
+  - mode: integrated
+  - mode_reason: Condivide la codebase Zig in src/ o esegue verifica integrata
 - [ ] s3-ui-controls | Verificare e rifinire barra metadati, progress bar, scorciatoie playback e overlay (? / f) sopra/attorno al layer Kitty
   - tags: ui, cliamp
   - deps: s3-align
+  - mode: integrated
+  - mode_reason: Condivide la codebase Zig in src/ o esegue verifica integrata
 
 ## Completion criteria
 

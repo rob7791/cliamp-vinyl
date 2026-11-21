@@ -13,12 +13,18 @@ Aggiungere installazione in ~/.local/bin/vinyl, eseguire test end-to-end (60+ FP
 - [ ] s5-install | Aggiungere installazione del binario in ~/.local/bin/vinyl
   - tags: packaging
   - deps: s3-vis-polish, s3-ui-controls, s4-art-verify
+  - mode: integrated
+  - mode_reason: Condivide la codebase Zig in src/ o esegue verifica integrata
 - [ ] s5-e2e | Eseguire test end-to-end a 60+ FPS (daemon auto-start/attach, pausa/inerzia, cambio brano, resize, cleanup)
   - tags: verify, perf
   - deps: s5-install
+  - mode: integrated
+  - mode_reason: Condivide la codebase Zig in src/ o esegue verifica integrata
 - [ ] s5-readme | Scrivere README.md con installazione, setup plugin cliamp, opzioni CLI e scorciatoie
   - tags: docs
   - deps: s5-e2e
+  - mode: isolated
+  - mode_reason: Scrive solo README.md a fine implementazione
 
 ## Completion criteria
 
