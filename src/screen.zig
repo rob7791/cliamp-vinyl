@@ -105,8 +105,8 @@ pub const Screen = struct {
         try self.putNum(c.b);
     }
 
-    /// Builds the escape stream for changed cells. Returns bytes to write.
-    pub fn flush(self: *Screen) ![]const u8 {
+    /// Builds the escape stream for changed cells plus optional Kitty payload. Returns bytes to write.
+    pub fn flush(self: *Screen, kitty_payload: []const u8) ![]const u8 {
         self.out.clearRetainingCapacity();
         try self.put("\x1b[?2026h"); // begin synchronized update
         if (self.force) try self.put("\x1b[0m");
@@ -160,6 +160,7 @@ pub const Screen = struct {
                 cur_c = c + 1;
             }
         }
+        if (kitty_payload.len > 0) try self.put(kitty_payload);
         try self.put("\x1b[?2026l");
         @memcpy(self.prev, self.cells);
         self.force = false;

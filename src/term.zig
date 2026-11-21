@@ -55,7 +55,7 @@ pub fn enter() !void {
 }
 
 pub fn leave() void {
-    writeAll("\x1b[0m\x1b[2J\x1b[?7h\x1b[?25h\x1b[?1049l");
+    writeAll("\x1b_Ga=d,d=A,q=2;\x1b\\\x1b[0m\x1b[2J\x1b[?7h\x1b[?25h\x1b[?1049l");
     if (orig_termios) |t| posix.tcsetattr(posix.STDIN_FILENO, .FLUSH, t) catch {};
 }
 

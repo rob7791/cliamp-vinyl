@@ -6,6 +6,7 @@ const Cava = @import("cava.zig").Cava;
 const cliamp = @import("cliamp.zig");
 const art = @import("art.zig");
 const render = @import("render.zig");
+const kitty = @import("kitty.zig");
 
 const usage =
     \\vinyl — picture-disc player front-end for cliamp
@@ -18,15 +19,18 @@ const usage =
     \\Se cliamp è già in esecuzione (TUI o demone) vinyl si collega a quello.
     \\
     \\Opzioni:
-    \\  --fps N          frame al secondo (default 60, max 240)
-    \\  --bars N         barre per canale (default 48)
-    \\  --aspect F       rapporto altezza/larghezza cella (default: auto, o 2.1)
-    \\  --source NAME    sorgente PulseAudio/PipeWire per cava (default auto)
-    \\  --bass-top       bassi in alto invece che in basso
-    \\  --no-sheen       disattiva i riflessi del vinile
-    \\  --keep-daemon    non fermare il demone lanciato da vinyl all'uscita
-    \\  --no-daemon      non lanciare mai cliamp, attendi solo il socket
-    \\  -h, --help       questo aiuto
+    \\  --fps N             frame al secondo (default 60, max 240)
+    \\  --bars N            barre per canale (default 48)
+    \\  --aspect F          rapporto altezza/larghezza cella (default: auto, o 2.1)
+    \\  --source NAME       sorgente PulseAudio/PipeWire per cava (default auto)
+    \\  --kitty-mode MODE   trasporto Kitty: direct (default) o file
+    \\  --force-kitty       forza il protocollo Kitty anche se non rilevato
+    \\  --no-kitty          disattiva il disco Kitty (solo visualizer Braille)
+    \\  --bass-top          bassi in alto invece che in basso
+    \\  --no-sheen          disattiva i riflessi del vinile
+    \\  --keep-daemon       non fermare il demone lanciato da vinyl all'uscita
+    \\  --no-daemon         non lanciare mai cliamp, attendi solo il socket
+    \\  -h, --help          questo aiuto
     \\
 ;
 
@@ -35,6 +39,9 @@ const Opts = struct {
     bars: usize = 48,
     aspect: ?f32 = null,
     source: ?[]const u8 = null,
+    kitty_mode: kitty.Mode = .direct,
+    force_kitty: bool = false,
+    no_kitty: bool = false,
     bass_top: bool = false,
     sheen: bool = true,
     keep_daemon: bool = false,
@@ -71,6 +78,20 @@ pub fn main() !void {
         } else if (eq(u8, a, "--source") and i + 1 < argv.len) {
             i += 1;
             opts.source = argv[i];
+        } else if (eq(u8, a, "--kitty-mode") and i + 1 < argv.len) {
+            i += 1;
+            if (eq(u8, argv[i], "file")) {
+                opts.kitty_mode = .file;
+            } else if (eq(u8, argv[i], "direct")) {
+                opts.kitty_mode = .direct;
+            } else {
+                std.debug.print("modalità Kitty non valida: {s} (usa direct o file)\n", .{argv[i]});
+                return;
+            }
+        } else if (eq(u8, a, "--force-kitty")) {
+            opts.force_kitty = true;
+        } else if (eq(u8, a, "--no-kitty")) {
+            opts.no_kitty = true;
         } else if (eq(u8, a, "--bass-top")) {
             opts.bass_top = true;
         } else if (eq(u8, a, "--no-sheen")) {
@@ -135,6 +156,15 @@ pub fn main() !void {
 
     var screen = Screen.init(gpa);
     defer screen.deinit();
+
+    const kitty_supported = kitty.isSupported();
+    const use_kitty = !opts.no_kitty and (kitty_supported or opts.force_kitty);
+    const kitty_warn = !opts.no_kitty and !kitty_supported and !opts.force_kitty;
+
+    var kitty_enc = kitty.Encoder{ .alloc = gpa, .mode = opts.kitty_mode };
+    defer kitty_enc.deinit();
+    var kitty_out: std.ArrayList(u8) = .empty;
+    defer kitty_out.deinit(gpa);
 
     try term.enter();
     defer term.leave();
@@ -228,6 +258,8 @@ pub fn main() !void {
         spin += (target - spin) * @min(1.0, dt * 2.5);
         angle = @mod(angle + spin * dt, std.math.tau);
 
+        kitty_out.clearRetainingCapacity();
+        const force_redraw = screen.force;
         renderer.render(&screen, .{
             .aspect = aspect,
             .angle = angle,
@@ -243,8 +275,12 @@ pub fn main() !void {
             .fps = fps_val,
             .bg_mode = bg_mode,
             .cava_ok = cava.ok,
+            .kitty_enc = if (use_kitty) &kitty_enc else null,
+            .kitty_out = &kitty_out,
+            .kitty_warn = kitty_warn,
+            .force_redraw = force_redraw,
         });
-        term.writeAll(try screen.flush());
+        term.writeAll(try screen.flush(kitty_out.items));
 
         // fps meter
         fps_acc += dt;
