@@ -145,8 +145,13 @@ pub const Loader = struct {
         if (self.has_art or self.tried_local) return;
         self.tried_local = true;
 
-        // 3) Embedded art / sidecar image for local files, 4) MPRIS artUrl.
+        // 3) Embedded art / sidecar image for local files, 4) Spotify oEmbed, 5) MPRIS artUrl.
         if (self.loadLocal(snap.path.get())) |img| {
+            self.has_art = true;
+            self.publish(img);
+            return;
+        } else |_| {}
+        if (self.loadSpotify(snap.path.get())) |img| {
             self.has_art = true;
             self.publish(img);
             return;
@@ -234,6 +239,34 @@ pub const Loader = struct {
         return error.NotFound;
     }
 
+    fn loadSpotify(self: *Loader, path_in: []const u8) !*Image {
+        const id = extractSpotifyTrackId(path_in) orelse return error.NotSpotify;
+        var obuf: [256]u8 = undefined;
+        const oembed_url = try std.fmt.bufPrint(&obuf, "https://open.spotify.com/oembed?url=https://open.spotify.com/track/{s}", .{id});
+        const r = try std.process.Child.run(.{
+            .allocator = self.alloc,
+            .argv = &.{ "curl", "-sfL", "--max-time", "10", oembed_url },
+            .max_output_bytes = 128 * 1024,
+        });
+        defer self.alloc.free(r.stdout);
+        defer self.alloc.free(r.stderr);
+        if (r.term != .Exited or r.term.Exited != 0) return error.DownloadFailed;
+
+        var ubuf: [1024]u8 = undefined;
+        const thumb = parseSpotifyOembedThumb(self.alloc, r.stdout, &ubuf) orelse return error.NotFound;
+
+        // Upgrade Spotify 300x300 CDN prefix (ab67616d00001e02) to 640x640 (ab67616d0000b273) when available
+        const lo_prefix = "ab67616d00001e02";
+        const hi_prefix = "ab67616d0000b273";
+        if (std.mem.indexOf(u8, thumb, lo_prefix)) |idx| {
+            var hbuf: [1024]u8 = undefined;
+            if (std.fmt.bufPrint(&hbuf, "{s}{s}{s}", .{ thumb[0..idx], hi_prefix, thumb[idx + lo_prefix.len ..] })) |hi_url| {
+                if (self.loadUrl(hi_url)) |img| return img else |_| {}
+            } else |_| {}
+        }
+        return self.loadUrl(thumb);
+    }
+
     fn loadMpris(self: *Loader) !*Image {
         const r = try std.process.Child.run(.{
             .allocator = self.alloc,
@@ -317,6 +350,37 @@ pub const Loader = struct {
         return 0;
     }
 };
+
+pub fn extractSpotifyTrackId(path: []const u8) ?[]const u8 {
+    if (std.mem.startsWith(u8, path, "spotify:track:")) {
+        const rest = path["spotify:track:".len..];
+        const end = std.mem.indexOfAny(u8, rest, ":?&/# \t\r\n") orelse rest.len;
+        if (end >= 10 and end <= 64) return rest[0..end];
+    }
+    if (std.mem.indexOf(u8, path, "open.spotify.com/track/")) |idx| {
+        const rest = path[idx + "open.spotify.com/track/".len ..];
+        const end = std.mem.indexOfAny(u8, rest, "?&/# \t\r\n") orelse rest.len;
+        if (end >= 10 and end <= 64) return rest[0..end];
+    }
+    return null;
+}
+
+pub fn parseSpotifyOembedThumb(alloc: std.mem.Allocator, body: []const u8, buf: []u8) ?[]const u8 {
+    var parsed = std.json.parseFromSlice(std.json.Value, alloc, body, .{}) catch return null;
+    defer parsed.deinit();
+    const root = switch (parsed.value) {
+        .object => |o| o,
+        else => return null,
+    };
+    const tv = root.get("thumbnail_url") orelse return null;
+    const url = switch (tv) {
+        .string => |s| s,
+        else => return null,
+    };
+    if (url.len == 0 or url.len > buf.len) return null;
+    @memcpy(buf[0..url.len], url);
+    return buf[0..url.len];
+}
 
 pub fn deriveSubsonicSongUrl(path: []const u8, buf: []u8) ?[]const u8 {
     if (!std.mem.startsWith(u8, path, "http://") and !std.mem.startsWith(u8, path, "https://")) return null;
@@ -623,4 +687,12 @@ test "placeholder, percentDecode, data URL, sidecar, and bridge parsing" {
     const bpm = parseSubsonicBpm(alloc, "{\"subsonic-response\":{\"status\":\"ok\",\"song\":{\"id\":\"tr-42\",\"bpm\":128}}}");
     try std.testing.expectEqual(@as(f32, 128.0), bpm);
     try std.testing.expectEqual(@as(f32, 0.0), parseSubsonicBpm(alloc, "{\"subsonic-response\":{\"status\":\"ok\",\"song\":{\"id\":\"tr-42\"}}}"));
+
+    // 7. Spotify URI extraction and oEmbed thumbnail parsing
+    try std.testing.expectEqualStrings("2Fxmhks0bxGSBdJ92vM42m", extractSpotifyTrackId("spotify:track:2Fxmhks0bxGSBdJ92vM42m").?);
+    try std.testing.expectEqualStrings("2Fxmhks0bxGSBdJ92vM42m", extractSpotifyTrackId("https://open.spotify.com/track/2Fxmhks0bxGSBdJ92vM42m?si=abc").?);
+    try std.testing.expect(extractSpotifyTrackId("/home/rob/Music/song.mp3") == null);
+    var sbuf: [256]u8 = undefined;
+    const thumb = parseSpotifyOembedThumb(alloc, "{\"thumbnail_url\":\"https://image-cdn-fa.spotifycdn.com/image/ab67616d00001e0250a3147b4edd7701a876c6ce\"}", &sbuf);
+    try std.testing.expectEqualStrings("https://image-cdn-fa.spotifycdn.com/image/ab67616d00001e0250a3147b4edd7701a876c6ce", thumb.?);
 }

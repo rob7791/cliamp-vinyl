@@ -67,6 +67,7 @@ cliamp plugins trust vinyl-art-bridge
 3. **Derivazione automatica dell'URL** per sorgenti remote prive di `album_art_url`:
    - **Navidrome / Subsonic**: converte `/rest/stream` o `/rest/download` in `/rest/getCoverArt`.
    - **YouTube / YouTube Music**: ricava la miniatura `https://i.ytimg.com/vi/<id>/hqdefault.jpg` dagli URL `youtube.com/watch?v=...` o `youtu.be/...`.
+   - **Spotify**: risolve la copertina (640×640) tramite l'endpoint pubblico `open.spotify.com/oembed` a partire da `spotify:track:<id>` o `open.spotify.com/track/<id>`.
 4. **File locali**: copertina incorporata nei tag del file audio (decodificata via `ffmpeg`) oppure immagine sidecar nella stessa cartella (`cover.jpg`, `cover.png`, `Cover.jpg`, `Cover.png`, `folder.jpg`, `folder.png`, `Folder.jpg`, `front.jpg`, `front.png`, `Front.jpg`, `album.jpg`, `AlbumArt.jpg`, `cover.webp`, `folder.webp`).
 5. **MPRIS `mpris:artUrl`** interrogando `org.mpris.MediaPlayer2.cliamp` via `gdbus`.
 6. **Placeholder procedurale**: vinile nero con solchi ed etichetta colorata generata in base al brano.
