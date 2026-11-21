@@ -188,7 +188,7 @@ pub fn main() !void {
     var spin: f32 = 0; // rad/s
     var rpm: f32 = opts.rpm;
     var rpm_hud_timer: f32 = 0;
-    var peak_mode: render.PeakMode = .path;
+    var peak_mode: render.PeakMode = .ellipsis;
     var glow = true;
     var aurora = true;
     var hud_msg: []const u8 = "";
@@ -272,8 +272,16 @@ pub fn main() !void {
                     rpm_hud_timer = 2.0;
                 },
                 'w' => {
-                    peak_mode = if (peak_mode == .path) .peak else .path;
-                    hud_msg = if (peak_mode == .path) " path (1:1) " else " peak ";
+                    peak_mode = switch (peak_mode) {
+                        .ellipsis => .path,
+                        .path => .peak,
+                        .peak => .ellipsis,
+                    };
+                    hud_msg = switch (peak_mode) {
+                        .ellipsis => " ellipsis ",
+                        .path => " path (1:1) ",
+                        .peak => " peak ",
+                    };
                     hud_timer = 2.0;
                 },
                 'g' => {

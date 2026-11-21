@@ -77,7 +77,7 @@ pub const Texture = struct {
 };
 
 pub const BgMode = enum { tint, black };
-pub const PeakMode = enum { path, peak };
+pub const PeakMode = enum { ellipsis, path, peak };
 
 pub const Params = struct {
     aspect: f32, // cell height / cell width
@@ -96,7 +96,7 @@ pub const Params = struct {
     fps: f32,
     rpm: f32 = 33.333,
     show_rpm: bool = false,
-    peak_mode: PeakMode = .path,
+    peak_mode: PeakMode = .ellipsis,
     glow: bool = true,
     aurora: bool = true,
     hud_msg: []const u8 = "",
@@ -116,6 +116,7 @@ pub const Renderer = struct {
     old_tex: Texture = .{},
     fade: f32 = 1.0,
     amp: [ANG]f32 = [_]f32{0} ** ANG,
+    raw_amp: [ANG]f32 = [_]f32{0} ** ANG,
     path_low: [ANG]f32 = [_]f32{0} ** ANG,
     path_mid: [ANG]f32 = [_]f32{0} ** ANG,
     path_high: [ANG]f32 = [_]f32{0} ** ANG,
@@ -308,6 +309,7 @@ pub const Renderer = struct {
             const env_high = 0.25 + 0.75 * std.math.pow(f32, s_high, 1.4);
 
             const raw_here = std.math.clamp(if (right_side) linSample(raw_r, fpos) else linSample(raw_l, fpos), 0, 1);
+            self.raw_amp[a] = raw_here;
             const deform = 0.88 + 0.22 * raw_here;
 
             const ell_low = el * env_low * deform * 1.15;
@@ -652,7 +654,7 @@ pub const Renderer = struct {
                         const top = r0 + ring_min + v * ring_h;
 
                         var hit_layer: u8 = 0;
-                        if (p.peak_mode == .path) {
+                        if (p.peak_mode == .ellipsis) {
                             const r_low = r0 + ring_min + self.path_low[idx] * ring_h;
                             const r_mid = r0 + ring_min + self.path_mid[idx] * ring_h;
                             const r_high = r0 + ring_min + self.path_high[idx] * ring_h;
@@ -678,6 +680,19 @@ pub const Renderer = struct {
                                 } else if (has_high and @abs(rho - r_high) <= path_w) {
                                     hit_layer = 1;
                                 }
+                            }
+                        } else if (p.peak_mode == .path) {
+                            const prev_idx: usize = if (idx == 0) ANG - 1 else idx - 1;
+                            const next_idx: usize = if (idx + 1 >= ANG) 0 else idx + 1;
+                            const r_cur = r0 + ring_min + self.raw_amp[idx] * ring_h;
+                            const r_prev = r0 + ring_min + self.raw_amp[prev_idx] * ring_h;
+                            const r_next = r0 + ring_min + self.raw_amp[next_idx] * ring_h;
+                            const mid_prev = (r_cur + r_prev) * 0.5;
+                            const mid_next = (r_cur + r_next) * 0.5;
+                            const seg_lo = @min(r_cur, @min(mid_prev, mid_next)) - path_w;
+                            const seg_hi = @max(r_cur, @max(mid_prev, mid_next)) + path_w;
+                            if ((rho >= seg_lo and rho <= seg_hi) or (rho > top and rho <= r_cur)) {
+                                hit_layer = 3;
                             }
                         }
 
@@ -769,7 +784,7 @@ pub const Renderer = struct {
                 " s / r   shuffle / repeat",
                 " [ / ]   spin ∓5 RPM ({/} ∓1)",
                 " v / 0   preset RPM / reset",
-                " w       path 1:1 / peak",
+                " w       ellipsis / path / peak",
                 " g       bagliore cassa on/off",
                 " a       aurora sub-bass on/off",
                 " l       riflessi on/off",
@@ -1019,7 +1034,7 @@ test "render aligns Kitty disc with circular Braille ring without overlap" {
     try std.testing.expect(braille_count > 40);
 }
 
-test "PeakMode.path draws skyblue 1:1 path from raw spectrum without smoothing" {
+test "PeakMode.ellipsis draws 3-band colors and PeakMode.path draws skyblue 1:1 peaks" {
     const alloc = std.testing.allocator;
     var r = Renderer{ .alloc = alloc };
     defer r.deinit();
@@ -1048,7 +1063,7 @@ test "PeakMode.path draws skyblue 1:1 path from raw spectrum without smoothing" 
         .show_fps = false,
         .show_help = false,
         .fps = 60.0,
-        .peak_mode = .path,
+        .peak_mode = .ellipsis,
         .bg_mode = .black,
         .cava_ok = true,
     });
@@ -1089,12 +1104,47 @@ test "PeakMode.path draws skyblue 1:1 path from raw spectrum without smoothing" 
         .show_fps = false,
         .show_help = false,
         .fps = 60.0,
-        .peak_mode = .path,
+        .peak_mode = .ellipsis,
         .bg_mode = .black,
         .cava_ok = true,
     });
     try std.testing.expect(r.path_low[0] > r.path_low[ANG / 2] * 2.0);
     try std.testing.expect(r.path_high[ANG / 2] > r.path_high[0] * 2.0);
+
+    // PeakMode.path renders pure skyblue 1:1 peaks without lime/crimson ellipses
+    r.render(&s, .{
+        .aspect = 2.0,
+        .angle = 0.0,
+        .dt = 1.0 / 60.0,
+        .left = &zero_bars,
+        .right = &zero_bars,
+        .raw_left = &raw_bars,
+        .raw_right = &raw_bars,
+        .snap = &snap,
+        .position = 0,
+        .sheen = false,
+        .bass_top = false,
+        .show_fps = false,
+        .show_help = false,
+        .fps = 60.0,
+        .peak_mode = .path,
+        .bg_mode = .black,
+        .cava_ok = true,
+    });
+    var path_sky: usize = 0;
+    var path_other: usize = 0;
+    for (0..36) |row| {
+        for (0..120) |col| {
+            const cell = s.at(col, row);
+            if (cell.cp >= 0x2800 and cell.cp <= 0x28FF) {
+                if (cell.fg.r == 135 and cell.fg.g == 206 and cell.fg.b == 235) path_sky += 1;
+                if ((cell.fg.r == 50 and cell.fg.g == 205 and cell.fg.b == 50) or
+                    (cell.fg.r == 220 and cell.fg.g == 20 and cell.fg.b == 60)) path_other += 1;
+            }
+        }
+    }
+    try std.testing.expect(path_sky > 30);
+    try std.testing.expectEqual(@as(usize, 0), path_other);
 }
 
 test "kick sidechain glow reacts stronger to sudden 100-300Hz hits and radiates past disc" {

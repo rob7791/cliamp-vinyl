@@ -122,7 +122,7 @@ Tutti gli argomenti non riconosciuti da `vinyl` vengono inoltrati direttamente a
 | `{` / `}` | Regolazione fine della velocità di rotazione di ±1 RPM |
 | `v` | Cicla i preset vinile (`33.3`, `45`, `78`, `0`, `16.7` RPM) |
 | `0` | Ripristina la velocità predefinita (`33.3` RPM) |
-| `w` | Alterna tra le 3 curve ellittiche 1:1 (`skyblue` basse, `limegreen` medie, `crimson` alte, con riempimento a scalare) e i classici `peak` con decay |
+| `w` | Cicla la modalità sovrapposizione: `ellipsis` (3 curve ellittiche + picchi 1:1 `skyblue`/`limegreen`/`crimson`), `path (1:1)` (linea picchi 1:1 `skyblue` senza ellissi) e `peak` (classici trattini con decay) |
 | `g` | Attiva/disattiva il bagliore sidechain sui colpi di cassa (100–300 Hz) attorno al disco |
 | `a` | Attiva/disattiva l'aurora scura temporalesca ai lati dello schermo sui sub-bassi (20–80 Hz) |
 | `l` | Attiva/disattiva i riflessi del vinile |
