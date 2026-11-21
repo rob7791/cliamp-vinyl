@@ -704,7 +704,10 @@ pub const Renderer = struct {
                             const seg_lo = @min(r_cur, @min(mid_prev, mid_next)) - path_w;
                             const seg_hi = @max(r_cur, @max(mid_prev, mid_next)) + path_w;
                             if ((rho >= seg_lo and rho <= seg_hi) or (rho > top and rho <= r_cur)) {
-                                hit_layer = 3;
+                                const right_side = th < std.math.pi;
+                                const t = if (right_side) th / std.math.pi else (TAU - th) / std.math.pi;
+                                const u = if (p.bass_top) t else 1.0 - t;
+                                hit_layer = if (u < 0.34) 3 else if (u < 0.67) 2 else 1;
                             }
                         }
 
@@ -1123,7 +1126,7 @@ test "PeakMode.ellipsis draws 3-band colors and PeakMode.path draws skyblue 1:1 
     try std.testing.expect(r.path_low[0] > r.path_low[ANG / 2] * 2.0);
     try std.testing.expect(r.path_high[ANG / 2] > r.path_high[0] * 2.0);
 
-    // PeakMode.path renders pure skyblue 1:1 peaks without lime/crimson ellipses
+    // PeakMode.path renders 1:1 peaks partitioned into skyblue (bass), limegreen (mids), crimson (highs)
     r.render(&s, .{
         .aspect = 2.0,
         .angle = 0.0,
@@ -1144,19 +1147,21 @@ test "PeakMode.ellipsis draws 3-band colors and PeakMode.path draws skyblue 1:1 
         .cava_ok = true,
     });
     var path_sky: usize = 0;
-    var path_other: usize = 0;
+    var path_lime: usize = 0;
+    var path_crimson: usize = 0;
     for (0..36) |row| {
         for (0..120) |col| {
             const cell = s.at(col, row);
             if (cell.cp >= 0x2800 and cell.cp <= 0x28FF) {
                 if (cell.fg.r == 135 and cell.fg.g == 206 and cell.fg.b == 235) path_sky += 1;
-                if ((cell.fg.r == 50 and cell.fg.g == 205 and cell.fg.b == 50) or
-                    (cell.fg.r == 220 and cell.fg.g == 20 and cell.fg.b == 60)) path_other += 1;
+                if (cell.fg.r == 50 and cell.fg.g == 205 and cell.fg.b == 50) path_lime += 1;
+                if (cell.fg.r == 220 and cell.fg.g == 20 and cell.fg.b == 60) path_crimson += 1;
             }
         }
     }
-    try std.testing.expect(path_sky > 30);
-    try std.testing.expectEqual(@as(usize, 0), path_other);
+    try std.testing.expect(path_sky > 10);
+    try std.testing.expect(path_lime > 10);
+    try std.testing.expect(path_crimson > 10);
 }
 
 test "kick sidechain glow reacts stronger to sudden 100-300Hz hits and radiates past disc" {
