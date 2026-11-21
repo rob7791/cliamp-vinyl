@@ -1,7 +1,7 @@
 # Step 002 — Rendering del disco via Kitty graphics protocol
 
 **Plan phase:** Phase 2: Disc Rendering
-**Status:** not started
+**Status:** in progress
 **Prerequisites:** Step 001 (verifica Kitty graphics protocol e metriche pixel)
 
 ## Goal
@@ -10,11 +10,12 @@ Sostituire il rendering half-block del disco in src/render.zig con un renderer R
 
 ## Checklist
 
-- [ ] s2-kitty-mod | Implementare modulo src/kitty.zig per trasmissione RGBA Kitty e cleanup su resize/uscita
+- [x] s2-kitty-mod | Implementare modulo src/kitty.zig per trasmissione RGBA Kitty e cleanup su resize/uscita
   - tags: kitty, impl
   - deps: s1-transport, s1-fallback-dec
   - mode: integrated
   - mode_reason: Condivide la codebase Zig in src/ o esegue verifica integrata
+  - result: Implementato src/kitty.zig (Mode direct t=d chunked e file t=f ring-buffer 4 slot, isSupported, emitDeleteAll, cleanup); zig test superati (2/2)
 - [ ] s2-disc-rgba | Sostituire il disco half-block con rasterizzazione RGBA circolare ad alta risoluzione (rotazione, buco, AA, riflessi, crossfade)
   - tags: kitty, render, impl
   - deps: s2-kitty-mod
