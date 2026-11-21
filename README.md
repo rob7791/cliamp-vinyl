@@ -123,7 +123,7 @@ Tutti gli argomenti non riconosciuti da `vinyl` vengono inoltrati direttamente a
 | `{` / `}` | Regolazione fine della velocità di rotazione di ±1 RPM |
 | `v` | Cicla i preset vinile (`28`, `33.3`, `45`, `78`, `0`, `16.7` RPM) in modalità manuale |
 | `0` | Ripristina la modalità automatica legata ai BPM della traccia (o `28` RPM se i BPM non sono disponibili) |
-| `w` | Cicla la modalità visualizer: `path (1:1)` *(default, solo riempimento picchi 1:1 sfumato `rebeccapurple`/`teal`/`yellow` senza bande base)*, `ellipsis` (bande + 3 curve ellittiche/picchi 1:1) e `peak` (bande + trattini con decay) |
+| `w` | Cicla la modalità visualizer: `path (1:1)` *(default, solo riempimento picchi 1:1 sfumato `rebeccapurple`/`teal`/`yellow` senza bande base)*, `ellipsis` (soli bordi colorati delle 3 curve ellittiche/picchi 1:1 senza riempimento né bande) e `peak` (bande smorzate + trattini con decay) |
 | `g` | Attiva/disattiva il bagliore sidechain sui colpi di cassa (100–300 Hz) attorno al disco |
 | `a` | Attiva/disattiva l'aurora scura temporalesca ai lati dello schermo sui sub-bassi (20–80 Hz) |
 | `c` | Alterna i colori di bagliore cassa e aurora tra quelli derivati dalla copertina/scurimento (`cover`) e quelli coerenti con la frequenza predominante (`rebeccapurple` per aurora, tra `rebeccapurple` e `teal` per cassa) |

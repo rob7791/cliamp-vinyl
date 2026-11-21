@@ -839,31 +839,29 @@ pub const Renderer = struct {
                         var hit_layer: u8 = 0;
                         var hit_path = false;
                         if (p.peak_mode == .ellipsis) {
-                            const r_low = r0 + ring_min + self.path_low[idx] * ring_h;
-                            const r_mid = r0 + ring_min + self.path_mid[idx] * ring_h;
-                            const r_high = r0 + ring_min + self.path_high[idx] * ring_h;
-                            const has_low = self.path_low[idx] > 0.01;
-                            const has_mid = self.path_mid[idx] > 0.01;
-                            const has_high = self.path_high[idx] > 0.01;
-
-                            if (rho > top) {
-                                // Fill gaps in priority order: bass (skyblue) > mids (limegreen) > highs (crimson)
-                                if (has_low and rho <= r_low + path_w) {
-                                    hit_layer = 3;
-                                } else if (has_mid and rho <= r_mid + path_w) {
-                                    hit_layer = 2;
-                                } else if (has_high and rho <= r_high + path_w) {
-                                    hit_layer = 1;
+                            const prev_idx: usize = if (idx == 0) ANG - 1 else idx - 1;
+                            const next_idx: usize = if (idx + 1 >= ANG) 0 else idx + 1;
+                            const onCurve = struct {
+                                inline fn f(arr: *const [ANG]f32, cur_i: usize, p_i: usize, n_i: usize, base: f32, scale: f32, half_w: f32, r_val: f32) bool {
+                                    if (arr[cur_i] <= 0.01) return false;
+                                    const rc = base + arr[cur_i] * scale;
+                                    const rp = base + arr[p_i] * scale;
+                                    const rn = base + arr[n_i] * scale;
+                                    const mp = (rc + rp) * 0.5;
+                                    const mn = (rc + rn) * 0.5;
+                                    const lo = @min(rc, @min(mp, mn)) - half_w;
+                                    const hi = @max(rc, @max(mp, mn)) + half_w;
+                                    return r_val >= lo and r_val <= hi;
                                 }
-                            } else {
-                                // Inside smoothed band: overlay contour lines in priority order
-                                if (has_low and @abs(rho - r_low) <= path_w) {
-                                    hit_layer = 3;
-                                } else if (has_mid and @abs(rho - r_mid) <= path_w) {
-                                    hit_layer = 2;
-                                } else if (has_high and @abs(rho - r_high) <= path_w) {
-                                    hit_layer = 1;
-                                }
+                            }.f;
+                            const r_base = r0 + ring_min;
+                            // Outlines only (no fill, no smoothed bands), priority: low > mid > high
+                            if (onCurve(&self.path_low, idx, prev_idx, next_idx, r_base, ring_h, path_w, rho)) {
+                                hit_layer = 3;
+                            } else if (onCurve(&self.path_mid, idx, prev_idx, next_idx, r_base, ring_h, path_w, rho)) {
+                                hit_layer = 2;
+                            } else if (onCurve(&self.path_high, idx, prev_idx, next_idx, r_base, ring_h, path_w, rho)) {
+                                hit_layer = 1;
                             }
                         } else if (p.peak_mode == .path) {
                             const prev_idx: usize = if (idx == 0) ANG - 1 else idx - 1;
@@ -892,11 +890,11 @@ pub const Renderer = struct {
                         if (hit_path) {
                             bits |= dot_bits[j][i];
                             continue;
-                        } else if (p.peak_mode == .path) {
-                            continue;
                         } else if (hit_layer > 0) {
                             bits |= dot_bits[j][i];
                             cell_layer = @max(cell_layer, hit_layer);
+                            continue;
+                        } else if (p.peak_mode != .peak) {
                             continue;
                         } else if (rho <= top) {
                             const q = std.math.clamp((rho - r0) / ring_h, 0, 1);
