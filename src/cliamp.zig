@@ -40,6 +40,7 @@ pub const Snapshot = struct {
     position: f64 = 0,
     duration: f64 = 0,
     volume: f64 = 0,
+    bpm: f32 = 0,
     shuffle: bool = false,
     repeat: Str(8) = .{},
     /// monotonic timestamp (ns) when `position` was sampled
@@ -243,6 +244,8 @@ pub const Client = struct {
             if (getStr(t, "artist")) |x| s.artist.set(x);
             if (getStr(t, "album")) |x| s.album.set(x);
             if (getStr(t, "path")) |x| s.path.set(x);
+            const tbpm = getNum(t, "bpm");
+            if (tbpm > 0) s.bpm = @floatCast(tbpm);
             // Any field that looks like a cover URL (never match "artist"!).
             var it = t.iterator();
             while (it.next()) |e| {

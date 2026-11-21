@@ -95,7 +95,8 @@ pub const Params = struct {
     show_fps: bool,
     show_help: bool,
     fps: f32,
-    rpm: f32 = 33.333,
+    rpm: f32 = 28.0,
+    bpm: f32 = 0,
     show_rpm: bool = false,
     peak_mode: PeakMode = .path,
     glow: bool = true,
@@ -812,7 +813,10 @@ pub const Renderer = struct {
 
         const top_hud = p.show_fps or p.show_rpm or p.hud_msg.len > 0;
         if (p.show_fps) {
-            const t = std.fmt.bufPrint(&buf, " {d:.1} fps · {d:.1} rpm{s} ", .{ p.fps, p.rpm, if (p.hud_msg.len > 0) p.hud_msg else "" }) catch "";
+            const t = if (p.bpm > 0)
+                std.fmt.bufPrint(&buf, " {d:.1} fps · {d:.1} rpm ({d:.0} bpm){s} ", .{ p.fps, p.rpm, p.bpm, if (p.hud_msg.len > 0) p.hud_msg else "" }) catch ""
+            else
+                std.fmt.bufPrint(&buf, " {d:.1} fps · {d:.1} rpm{s} ", .{ p.fps, p.rpm, if (p.hud_msg.len > 0) p.hud_msg else "" }) catch "";
             _ = s.text(0, 0, t, faint, false);
         } else if (p.hud_msg.len > 0) {
             _ = s.text(0, 0, p.hud_msg, light, true);

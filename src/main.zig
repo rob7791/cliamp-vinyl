@@ -20,7 +20,7 @@ const usage =
     \\
     \\Opzioni:
     \\  --fps N             frame al secondo (default 60, max 240)
-    \\  --rpm F             velocità di rotazione disco in RPM (default 33.333, 0..200)
+    \\  --rpm F             velocità manuale disco in RPM (default: auto da BPM o 28)
     \\  --bars N            barre per canale (default 48)
     \\  --aspect F          rapporto altezza/larghezza cella (default: auto, o 2.1)
     \\  --source NAME       sorgente PulseAudio/PipeWire per cava (default auto)
@@ -40,7 +40,7 @@ const bridge_lua = @embedFile("vinyl-art-bridge.lua");
 
 const Opts = struct {
     fps: u32 = 60,
-    rpm: f32 = 33.333,
+    rpm: ?f32 = null,
     bars: usize = 48,
     aspect: ?f32 = null,
     source: ?[]const u8 = null,
@@ -184,9 +184,11 @@ pub fn main() !void {
     const frame_ns: i128 = @divTrunc(std.time.ns_per_s, opts.fps);
     var next_frame = std.time.nanoTimestamp();
     var last = next_frame;
+    const default_rpm: f32 = 28.0;
     var angle: f32 = 0;
     var spin: f32 = 0; // rad/s
-    var rpm: f32 = opts.rpm;
+    var rpm_manual: bool = opts.rpm != null;
+    var rpm: f32 = opts.rpm orelse default_rpm;
     var rpm_hud_timer: f32 = 0;
     var peak_mode: render.PeakMode = .path;
     var glow = true;
@@ -194,7 +196,7 @@ pub fn main() !void {
     var fx_color: render.FxColorMode = .cover;
     var hud_msg: []const u8 = "";
     var hud_timer: f32 = 0;
-    const rpm_presets = [_]f32{ 33.333, 45.0, 78.0, 0.0, 16.666 };
+    const rpm_presets = [_]f32{ 28.0, 33.333, 45.0, 78.0, 0.0, 16.666 };
     var sheen = opts.sheen;
     var bass_top = opts.bass_top;
     var show_fps = false;
@@ -242,22 +244,27 @@ pub fn main() !void {
                 'f' => show_fps = !show_fps,
                 'b' => bg_mode = if (bg_mode == .tint) .black else .tint,
                 '[' => {
+                    rpm_manual = true;
                     rpm = @max(0.0, rpm - 5.0);
                     rpm_hud_timer = 2.0;
                 },
                 ']' => {
+                    rpm_manual = true;
                     rpm = @min(200.0, rpm + 5.0);
                     rpm_hud_timer = 2.0;
                 },
                 '{' => {
+                    rpm_manual = true;
                     rpm = @max(0.0, rpm - 1.0);
                     rpm_hud_timer = 2.0;
                 },
                 '}' => {
+                    rpm_manual = true;
                     rpm = @min(200.0, rpm + 1.0);
                     rpm_hud_timer = 2.0;
                 },
                 'v' => {
+                    rpm_manual = true;
                     var next_idx: usize = 0;
                     for (rpm_presets, 0..) |preset, idx| {
                         if (@abs(rpm - preset) < 0.5) {
@@ -269,8 +276,9 @@ pub fn main() !void {
                     rpm_hud_timer = 2.0;
                 },
                 '0' => {
-                    rpm = 33.333;
-                    rpm_hud_timer = 2.0;
+                    rpm_manual = false;
+                    hud_msg = " rpm: auto (BPM) ";
+                    hud_timer = 2.0;
                 },
                 'w' => {
                     peak_mode = switch (peak_mode) {
@@ -333,9 +341,13 @@ pub fn main() !void {
             pos += @as(f64, @floatFromInt(now - snap.stamp_ns)) / std.time.ns_per_s;
         if (snap.duration > 0) pos = @min(pos, snap.duration);
 
-        // turntable inertia
+        // turntable inertia (auto BPM -> RPM when not manually overridden, smooth transition on track change)
         if (rpm_hud_timer > 0) rpm_hud_timer = @max(0.0, rpm_hud_timer - dt);
         if (hud_timer > 0) hud_timer = @max(0.0, hud_timer - dt);
+        const track_bpm = loader.getBpm();
+        if (!rpm_manual) {
+            rpm = if (track_bpm > 0) std.math.clamp(track_bpm * (default_rpm / 120.0), 6.0, 90.0) else default_rpm;
+        }
         const rpm_speed: f32 = rpm / 60.0 * std.math.tau;
         const target: f32 = if (snap.state == .playing) rpm_speed else 0;
         spin += (target - spin) * @min(1.0, dt * 2.5);
@@ -359,6 +371,7 @@ pub fn main() !void {
             .show_help = show_help,
             .fps = fps_val,
             .rpm = rpm,
+            .bpm = track_bpm,
             .show_rpm = rpm_hud_timer > 0,
             .peak_mode = peak_mode,
             .glow = glow,

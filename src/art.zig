@@ -25,6 +25,7 @@ pub const Loader = struct {
     client: *cliamp.Client,
     mutex: std.Thread.Mutex = .{},
     pending: ?*Image = null,
+    bpm: f32 = 0,
     running: std.atomic.Value(bool) = std.atomic.Value(bool).init(true),
     thread: ?std.Thread = null,
 
@@ -33,6 +34,7 @@ pub const Loader = struct {
     tried_urls: [3]u64 = .{ 0, 0, 0 },
     has_art: bool = false,
     tried_local: bool = false,
+    tried_bpm: bool = false,
     bridge_mtime: i128 = 0,
     bridge_path_hash: u64 = 0,
     bridge_url: std.ArrayList(u8) = .empty,
@@ -56,6 +58,19 @@ pub const Loader = struct {
         const p = self.pending;
         self.pending = null;
         return p;
+    }
+
+    /// Main thread: latest resolved track BPM (0 if unavailable).
+    pub fn getBpm(self: *Loader) f32 {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        return self.bpm;
+    }
+
+    fn setBpm(self: *Loader, val: f32) void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        self.bpm = val;
     }
 
     fn publish(self: *Loader, img: *Image) void {
@@ -87,6 +102,18 @@ pub const Loader = struct {
             self.tried_urls = .{ 0, 0, 0 };
             self.has_art = false;
             self.tried_local = false;
+            self.tried_bpm = false;
+            self.setBpm(snap.bpm);
+        }
+
+        if (!self.tried_bpm) {
+            self.tried_bpm = true;
+            if (snap.bpm > 0) {
+                self.setBpm(snap.bpm);
+            } else {
+                const resolved = self.resolveBpm(snap.path.get());
+                self.setBpm(resolved);
+            }
         }
 
         self.refreshBridge();
@@ -246,7 +273,96 @@ pub const Loader = struct {
         computePalette(img);
         return img;
     }
+
+    fn resolveBpm(self: *Loader, path_in: []const u8) f32 {
+        if (path_in.len == 0) return 0;
+        var ubuf: [4096]u8 = undefined;
+        if (deriveSubsonicSongUrl(path_in, &ubuf)) |song_url| {
+            const r = std.process.Child.run(.{
+                .allocator = self.alloc,
+                .argv = &.{ "curl", "-sfL", "--max-time", "8", song_url },
+                .max_output_bytes = 256 * 1024,
+            }) catch return 0;
+            defer self.alloc.free(r.stdout);
+            defer self.alloc.free(r.stderr);
+            if (r.term == .Exited and r.term.Exited == 0) {
+                return parseSubsonicBpm(self.alloc, r.stdout);
+            }
+            return 0;
+        }
+        var pb: [4096]u8 = undefined;
+        const path = if (std.mem.startsWith(u8, path_in, "file://")) percentDecode(path_in[7..], &pb) else path_in;
+        if (path.len > 0 and path[0] == '/') {
+            const r = std.process.Child.run(.{
+                .allocator = self.alloc,
+                .argv = &.{
+                    "ffprobe",        "-v",       "error",
+                    "-show_entries",  "format_tags=bpm,TBPM,BPM:stream_tags=bpm,TBPM,BPM",
+                    "-of",            "default=nw=1:nk=1",
+                    path,
+                },
+                .max_output_bytes = 4096,
+            }) catch return 0;
+            defer self.alloc.free(r.stdout);
+            defer self.alloc.free(r.stderr);
+            if (r.term == .Exited and r.term.Exited == 0) {
+                var it = std.mem.tokenizeAny(u8, r.stdout, " \r\n\t");
+                while (it.next()) |tok| {
+                    if (std.fmt.parseFloat(f32, tok)) |val| {
+                        if (val >= 20.0 and val <= 350.0) return val;
+                    } else |_| {}
+                }
+            }
+        }
+        return 0;
+    }
 };
+
+pub fn deriveSubsonicSongUrl(path: []const u8, buf: []u8) ?[]const u8 {
+    if (!std.mem.startsWith(u8, path, "http://") and !std.mem.startsWith(u8, path, "https://")) return null;
+    const needles = [_][]const u8{
+        "/rest/stream.view?",
+        "/rest/stream?",
+        "/rest/download.view?",
+        "/rest/download?",
+    };
+    for (needles) |needle| {
+        if (std.mem.indexOf(u8, path, needle)) |idx| {
+            const q = path[idx + needle.len ..];
+            const has_json = std.mem.indexOf(u8, q, "f=json") != null;
+            return if (has_json)
+                std.fmt.bufPrint(buf, "{s}/rest/getSong?{s}", .{ path[0..idx], q }) catch null
+            else
+                std.fmt.bufPrint(buf, "{s}/rest/getSong?{s}&f=json", .{ path[0..idx], q }) catch null;
+        }
+    }
+    return null;
+}
+
+pub fn parseSubsonicBpm(alloc: std.mem.Allocator, body: []const u8) f32 {
+    var parsed = std.json.parseFromSlice(std.json.Value, alloc, body, .{}) catch return 0;
+    defer parsed.deinit();
+    const root = switch (parsed.value) {
+        .object => |o| o,
+        else => return 0,
+    };
+    const resp = switch (root.get("subsonic-response") orelse return 0) {
+        .object => |o| o,
+        else => return 0,
+    };
+    const song = switch (resp.get("song") orelse return 0) {
+        .object => |o| o,
+        else => return 0,
+    };
+    const bpmv = song.get("bpm") orelse return 0;
+    const val: f32 = switch (bpmv) {
+        .integer => |i| @floatFromInt(i),
+        .float => |f| @floatCast(f),
+        .string => |s| std.fmt.parseFloat(f32, s) catch 0,
+        else => 0,
+    };
+    return if (val >= 20.0 and val <= 350.0) val else 0;
+}
 
 fn percentDecode(s: []const u8, buf: []u8) []const u8 {
     var o: usize = 0;
@@ -500,4 +616,11 @@ test "placeholder, percentDecode, data URL, sidecar, and bridge parsing" {
     const yt = deriveRemoteArtUrl("https://music.youtube.com/watch?v=dQw4w9WgXcQ&list=RD1", &rbuf);
     try std.testing.expectEqualStrings("https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg", yt.?);
     try std.testing.expect(deriveRemoteArtUrl("/home/rob/Music/song.mp3", &rbuf) == null);
+
+    // 6. Subsonic getSong URL derivation and BPM parsing
+    const song_url = deriveSubsonicSongUrl("http://ubuntu01.local:30533/rest/stream?id=tr-42&u=cliamp&t=abc&s=xyz&v=1.16.1&c=cliamp", &rbuf);
+    try std.testing.expectEqualStrings("http://ubuntu01.local:30533/rest/getSong?id=tr-42&u=cliamp&t=abc&s=xyz&v=1.16.1&c=cliamp&f=json", song_url.?);
+    const bpm = parseSubsonicBpm(alloc, "{\"subsonic-response\":{\"status\":\"ok\",\"song\":{\"id\":\"tr-42\",\"bpm\":128}}}");
+    try std.testing.expectEqual(@as(f32, 128.0), bpm);
+    try std.testing.expectEqual(@as(f32, 0.0), parseSubsonicBpm(alloc, "{\"subsonic-response\":{\"status\":\"ok\",\"song\":{\"id\":\"tr-42\"}}}"));
 }

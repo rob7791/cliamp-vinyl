@@ -95,7 +95,7 @@ Tutti gli argomenti non riconosciuti da `vinyl` vengono inoltrati direttamente a
 | Opzione | Descrizione |
 | --- | --- |
 | `--fps N` | Frame al secondo (intervallo `5`–`240`, default `60`) |
-| `--rpm F` | Velocità di rotazione iniziale del disco in RPM (intervallo `0`–`200`, default `33.333`) |
+| `--rpm F` | Velocità manuale iniziale del disco in RPM (`0`–`200`; se omesso, `vinyl` adatta automaticamente gli RPM ai BPM della traccia con fallback a `28` RPM) |
 | `--bars N` | Numero di barre per canale per `cava` (intervallo `8`–`128`, default `48`) |
 | `--aspect F` | Rapporto altezza/larghezza delle celle (intervallo `1.0`–`4.0`; default rilevamento automatico o `2.1`) |
 | `--source NAME` | Sorgente audio PulseAudio/PipeWire per `cava` (default `auto`) |
@@ -120,8 +120,8 @@ Tutti gli argomenti non riconosciuti da `vinyl` vengono inoltrati direttamente a
 | `s` / `r` | Attiva/disattiva `shuffle` / cambia modalità `repeat` |
 | `[` / `]` | Diminuisce / aumenta la velocità di rotazione del disco di ±5 RPM (`0`–`200`) |
 | `{` / `}` | Regolazione fine della velocità di rotazione di ±1 RPM |
-| `v` | Cicla i preset vinile (`33.3`, `45`, `78`, `0`, `16.7` RPM) |
-| `0` | Ripristina la velocità predefinita (`33.3` RPM) |
+| `v` | Cicla i preset vinile (`28`, `33.3`, `45`, `78`, `0`, `16.7` RPM) in modalità manuale |
+| `0` | Ripristina la modalità automatica legata ai BPM della traccia (o `28` RPM se i BPM non sono disponibili) |
 | `w` | Cicla la modalità visualizer: `path (1:1)` *(default, solo riempimento picchi 1:1 sfumato `rebeccapurple`/`teal`/`yellow` senza bande base)*, `ellipsis` (bande + 3 curve ellittiche/picchi 1:1) e `peak` (bande + trattini con decay) |
 | `g` | Attiva/disattiva il bagliore sidechain sui colpi di cassa (100–300 Hz) attorno al disco |
 | `a` | Attiva/disattiva l'aurora scura temporalesca ai lati dello schermo sui sub-bassi (20–80 Hz) |
