@@ -125,6 +125,7 @@ Tutti gli argomenti non riconosciuti da `vinyl` vengono inoltrati direttamente a
 | `w` | Cicla la modalità visualizer: `path (1:1)` *(default, solo riempimento picchi 1:1 sfumato `rebeccapurple`/`teal`/`yellow` senza bande base)*, `ellipsis` (bande + 3 curve ellittiche/picchi 1:1) e `peak` (bande + trattini con decay) |
 | `g` | Attiva/disattiva il bagliore sidechain sui colpi di cassa (100–300 Hz) attorno al disco |
 | `a` | Attiva/disattiva l'aurora scura temporalesca ai lati dello schermo sui sub-bassi (20–80 Hz) |
+| `c` | Alterna i colori di bagliore cassa e aurora tra quelli derivati dalla copertina/scurimento (`cover`) e quelli coerenti con la frequenza predominante (`rebeccapurple` per aurora, tra `rebeccapurple` e `teal` per cassa) |
 | `l` | Attiva/disattiva i riflessi del vinile |
 | `b` | Alterna lo sfondo tra tinta derivata dalla copertina e nero |
 | `i` | Inverte l'orientamento delle frequenze (bassi in alto / in basso) |

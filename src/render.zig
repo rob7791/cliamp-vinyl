@@ -78,6 +78,7 @@ pub const Texture = struct {
 
 pub const BgMode = enum { tint, black };
 pub const PeakMode = enum { ellipsis, path, peak };
+pub const FxColorMode = enum { cover, spectrum };
 
 pub const Params = struct {
     aspect: f32, // cell height / cell width
@@ -99,6 +100,7 @@ pub const Params = struct {
     peak_mode: PeakMode = .path,
     glow: bool = true,
     aurora: bool = true,
+    fx_color: FxColorMode = .cover,
     hud_msg: []const u8 = "",
     bg_mode: BgMode,
     cava_ok: bool,
@@ -123,8 +125,10 @@ pub const Renderer = struct {
     peak: [ANG]f32 = [_]f32{0} ** ANG,
     kick_avg: f32 = 0,
     kick_glow: f32 = 0,
+    kick_dom_u: f32 = 0.34,
     sub_l: f32 = 0,
     sub_r: f32 = 0,
+    sub_dom_u: f32 = 0.10,
     aurora_phase: f32 = 0,
     tex_size_for: usize = 0,
     img_gen: u64 = 0,
@@ -206,18 +210,27 @@ pub const Renderer = struct {
         // 20–80 Hz => u in [0.0, 0.207]; 100–300 Hz => u in [0.241, 0.405]
         var sub_l_sum: f32 = 0;
         var sub_r_sum: f32 = 0;
+        var sub_u_num: f32 = 0;
+        var sub_u_den: f32 = 0;
         var sub_cnt: f32 = 0;
         var kick_sum: f32 = 0;
+        var kick_u_num: f32 = 0;
+        var kick_u_den: f32 = 0;
         var kick_cnt: f32 = 0;
         for (0..n) |i| {
             const u = if (n > 1) @as(f32, @floatFromInt(i)) / nf else 0.0;
+            const mono = 0.5 * (raw_l[i] + raw_r[i]);
             if (u <= 0.20) {
                 sub_l_sum += raw_l[i];
                 sub_r_sum += raw_r[i];
+                sub_u_num += u * mono;
+                sub_u_den += mono;
                 sub_cnt += 1.0;
             }
             if (u >= 0.22 and u <= 0.41) {
-                kick_sum += 0.5 * (raw_l[i] + raw_r[i]);
+                kick_sum += mono;
+                kick_u_num += u * mono;
+                kick_u_den += mono;
                 kick_cnt += 1.0;
             }
             const dl = (u - 0.12) / 0.20;
@@ -251,6 +264,8 @@ pub const Renderer = struct {
 
         // Kick sidechain detector: stronger glow for louder (dB) AND more sudden (transient flux) hits
         const kick_e: f32 = if (kick_cnt > 0) std.math.clamp(kick_sum / kick_cnt, 0, 1) else 0;
+        if (kick_u_den > 1e-4) self.kick_dom_u = kick_u_num / kick_u_den;
+        if (sub_u_den > 1e-4) self.sub_dom_u = sub_u_num / sub_u_den;
         const flux: f32 = @max(0.0, kick_e - self.kick_avg);
         self.kick_avg += (kick_e - self.kick_avg) * @min(1.0, p.dt * 5.5);
         const punch: f32 = std.math.clamp(std.math.pow(f32, kick_e, 1.15) * (0.30 + 3.0 * flux), 0, 1.0);
@@ -380,10 +395,11 @@ pub const Renderer = struct {
 
             self.updateRing(&p);
             if (p.glow and self.kick_glow > 0.004) {
-                self.drawGlow(s, cx, cy, rd, rmax, vis_rows, k, pal.c1, pal.c2, bgf);
+                const glow_src = if (p.fx_color == .spectrum) pathBandColor(self.kick_dom_u) else pal.c1;
+                self.drawGlow(s, cx, cy, rd, rmax, vis_rows, k, glow_src, pal.c2, bgf);
             }
             if (p.aurora and (self.sub_l > 0.004 or self.sub_r > 0.004)) {
-                self.drawAurora(s, vis_rows);
+                self.drawAurora(s, vis_rows, p.fx_color);
             }
             self.drawRing(s, &p, cx, cy, rd, r0, ring_h, ring_min, vis_rows, pal.c1, pal.c2, bgf);
 
@@ -573,13 +589,15 @@ pub const Renderer = struct {
     }
 
     /// Darkening storm-like aurora creeping inward from left & right screen edges on 20–80 Hz sub-bass.
-    fn drawAurora(self: *const Renderer, s: *Screen, vis_rows: usize) void {
+    fn drawAurora(self: *const Renderer, s: *Screen, vis_rows: usize, fx_color: FxColorMode) void {
         if (s.cols < 4 or vis_rows < 2) return;
         const cols_f: f32 = @floatFromInt(s.cols);
         const rows_f: f32 = @floatFromInt(vis_rows);
         const max_span = @max(4.0, cols_f * 0.44);
         const inv_span = 1.0 / max_span;
         const phase = self.aurora_phase;
+        const spec_col = pathBandColor(self.sub_dom_u);
+        const storm_tint = [3]f32{ spec_col[0] * 0.30, spec_col[1] * 0.30, spec_col[2] * 0.30 };
 
         for (0..vis_rows) |r| {
             const ny = (@as(f32, @floatFromInt(r)) + 0.5) / rows_f;
@@ -609,12 +627,17 @@ pub const Renderer = struct {
                 const amt = std.math.clamp(dark * 0.94, 0.0, 0.95);
                 if (amt <= 0.005) continue;
 
-                const scale = 1.0 - amt;
                 const cell = s.at(c, r);
-                const bg = Rgb{
-                    .r = @intFromFloat(@as(f32, @floatFromInt(cell.bg.r)) * scale),
-                    .g = @intFromFloat(@as(f32, @floatFromInt(cell.bg.g)) * scale),
-                    .b = @intFromFloat(@as(f32, @floatFromInt(cell.bg.b)) * scale),
+                const bg = switch (fx_color) {
+                    .cover => blk: {
+                        const scale = 1.0 - amt;
+                        break :blk Rgb{
+                            .r = @intFromFloat(@as(f32, @floatFromInt(cell.bg.r)) * scale),
+                            .g = @intFromFloat(@as(f32, @floatFromInt(cell.bg.g)) * scale),
+                            .b = @intFromFloat(@as(f32, @floatFromInt(cell.bg.b)) * scale),
+                        };
+                    },
+                    .spectrum => toRgb(mix3(toF(cell.bg), storm_tint, amt)),
                 };
                 cell.bg = bg;
                 if (cell.cp == ' ') cell.fg = bg;
@@ -817,6 +840,7 @@ pub const Renderer = struct {
                 " w       path / ellipsis / peak",
                 " g       bagliore cassa on/off",
                 " a       aurora sub-bass on/off",
+                " c       colori fx cover/freq",
                 " l       riflessi on/off",
                 " b       sfondo tinta/nero",
                 " i       inverti bassi su/giù",

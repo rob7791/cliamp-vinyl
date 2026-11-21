@@ -191,6 +191,7 @@ pub fn main() !void {
     var peak_mode: render.PeakMode = .path;
     var glow = true;
     var aurora = true;
+    var fx_color: render.FxColorMode = .cover;
     var hud_msg: []const u8 = "";
     var hud_timer: f32 = 0;
     const rpm_presets = [_]f32{ 33.333, 45.0, 78.0, 0.0, 16.666 };
@@ -294,6 +295,11 @@ pub fn main() !void {
                     hud_msg = if (aurora) " aurora on " else " aurora off ";
                     hud_timer = 2.0;
                 },
+                'c' => {
+                    fx_color = if (fx_color == .cover) .spectrum else .cover;
+                    hud_msg = if (fx_color == .spectrum) " fx: freq " else " fx: cover ";
+                    hud_timer = 2.0;
+                },
                 '?', 'h' => show_help = !show_help,
                 else => {},
             }
@@ -357,6 +363,7 @@ pub fn main() !void {
             .peak_mode = peak_mode,
             .glow = glow,
             .aurora = aurora,
+            .fx_color = fx_color,
             .hud_msg = if (hud_timer > 0) hud_msg else "",
             .bg_mode = bg_mode,
             .cava_ok = cava.ok,
