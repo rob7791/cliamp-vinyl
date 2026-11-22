@@ -698,40 +698,38 @@ pub const Renderer = struct {
                     },
                     .cd => {
                         if (rn < 0.318) {
-                            // Clear polycarbonate inner clamping hub with concentric CD ridges & thick inner rim
+                            // Flat clear polycarbonate inner hub with crisp machined edge & single stacking ring
                             self.disc_zone[idx] = 3;
-                            var alpha_f: f32 = 0.22; // translucent plastic base
-                            var tone: f32 = 195.0;
+                            var alpha_f: f32 = 0.20;
+                            var tone: f32 = 200.0;
 
-                            // Thick molded plastic edge right around the 15mm center hole
-                            if (rn < 0.152) {
-                                const edge = smoothstep(0.152, 0.125, rn);
-                                alpha_f = @max(alpha_f, 0.28 + 0.44 * edge);
-                                tone = 225.0 + 25.0 * edge;
+                            // Crisp thin cut-plastic inner rim around the 15mm center hole
+                            if (rn < 0.140) {
+                                const edge = smoothstep(0.140, 0.126, rn);
+                                alpha_f = mix1(alpha_f, 0.72, edge);
+                                tone = mix1(tone, 240.0, edge);
                             }
-                            // Concentric CD hub grooves / stacking ring ridges
-                            const r1 = @exp(-std.math.pow(f32, (rn - 0.195) / 0.008, 2.0));
-                            const r2 = @exp(-std.math.pow(f32, (rn - 0.242) / 0.011, 2.0));
-                            const r3 = @exp(-std.math.pow(f32, (rn - 0.278) / 0.007, 2.0));
-                            const ridge = @max(r1 * 0.7, @max(r2, r3 * 0.85));
-                            alpha_f = std.math.clamp(alpha_f + 0.38 * ridge, 0.0, 0.88);
-                            tone = std.math.clamp(tone + 45.0 * ridge, 0.0, 252.0);
-
-                            // Mirror-band silver collar just before printed cover area
-                            if (rn > 0.296) {
-                                const collar = smoothstep(0.296, 0.318, rn);
-                                alpha_f = mix1(alpha_f, 0.82, collar);
+                            // Single sharp machined CD stacking ring (thin, not wavy)
+                            const d_ring = @abs(rn - 0.255);
+                            if (d_ring < 0.007) {
+                                const step = smoothstep(0.007, 0.002, d_ring);
+                                alpha_f = @max(alpha_f, mix1(0.20, 0.56, step));
+                                tone = if (rn < 0.255) mix1(tone, 242.0, step) else mix1(tone, 155.0, step);
+                            }
+                            // Crisp silver mirror-band collar right before the printed artwork
+                            if (rn > 0.304) {
+                                const collar = smoothstep(0.304, 0.316, rn);
+                                alpha_f = mix1(alpha_f, 0.85, collar);
                                 tone = mix1(tone, 232.0, collar);
                             }
                             self.disc_gray[idx] = @intFromFloat(tone);
                             self.disc_alpha[idx] = @intFromFloat(std.math.clamp(base_a * alpha_f * 255.0 + 0.5, 0, 255));
-                        } else if (rn > 0.966) {
-                            // Clear polycarbonate outer rim: translucent inside, thicker/more opaque right at the edge
+                        } else if (rn > 0.970) {
+                            // Flat clear polycarbonate outer rim + crisp opaque outer cut edge
                             self.disc_zone[idx] = 3;
-                            const rim_t = smoothstep(0.966, 1.0, rn);
-                            const edge_thick = smoothstep(0.985, 1.0, rn);
-                            const alpha_f = 0.28 + 0.22 * rim_t + 0.36 * edge_thick;
-                            const tone = 198.0 + 48.0 * edge_thick;
+                            const edge_thick = smoothstep(0.988, 0.998, rn);
+                            const alpha_f = mix1(0.22, 0.78, edge_thick);
+                            const tone = mix1(200.0, 242.0, edge_thick);
                             self.disc_gray[idx] = @intFromFloat(std.math.clamp(tone, 0, 255));
                             self.disc_alpha[idx] = @intFromFloat(std.math.clamp(base_a * alpha_f * 255.0 + 0.5, 0, 255));
                         } else {
