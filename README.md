@@ -120,7 +120,7 @@ Tutti gli argomenti non riconosciuti da `vinyl` vengono inoltrati direttamente a
 | `←` / `→` | Seek indietro / avanti di 5 secondi |
 | `↑` / `↓` oppure `+` (`=`) / `-` | Regola il volume di ±1 dB |
 | `s` / `r` | Attiva/disattiva `shuffle` / cambia modalità `repeat` |
-| `[` / `]` | Diminuisce / aumenta la velocità di rotazione del disco di ±5 RPM (`0`–`200`) |
+| `[` / `]` | Diminuisce / aumenta la velocità di rotazione del disco (`0`–`200` RPM; step ±1 fino a `10` RPM, ±5 sopra `10` RPM) |
 | `{` / `}` | Regolazione fine della velocità di rotazione di ±1 RPM |
 | `v` | Cicla i preset vinile (`5`, `16.7`, `28`, `33.3`, `45`, `78`, `0` RPM) in modalità manuale |
 | `0` | Ripristina la modalità automatica legata ai BPM della traccia (o `5` RPM se i BPM non sono disponibili) |

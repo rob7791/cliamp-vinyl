@@ -270,12 +270,12 @@ pub fn main() !void {
                 'b' => bg_mode = if (bg_mode == .tint) .black else .tint,
                 '[' => {
                     rpm_manual = true;
-                    rpm = @max(0.0, rpm - 5.0);
+                    rpm = if (rpm <= 10.0) @max(0.0, rpm - 1.0) else @max(10.0, rpm - 5.0);
                     rpm_hud_timer = 2.0;
                 },
                 ']' => {
                     rpm_manual = true;
-                    rpm = @min(200.0, rpm + 5.0);
+                    rpm = if (rpm < 10.0) @min(10.0, rpm + 1.0) else @min(200.0, rpm + 5.0);
                     rpm_hud_timer = 2.0;
                 },
                 '{' => {
