@@ -905,16 +905,25 @@ pub const Renderer = struct {
                                 }
                             }.f;
                             const r_base = r0 + ring_min;
-                            const arr_low = if (p.peak_mode == .ellipsis2) &self.ell2_low else &self.path_low;
-                            const arr_mid = if (p.peak_mode == .ellipsis2) &self.ell2_mid else &self.path_mid;
-                            const arr_high = if (p.peak_mode == .ellipsis2) &self.ell2_high else &self.path_high;
-                            // Outlines only (no fill, no smoothed bands), priority: low > mid > high
-                            if (onCurve(arr_low, idx, prev_idx, next_idx, r_base, ring_h, path_w, rho)) {
-                                hit_layer = 3;
-                            } else if (onCurve(arr_mid, idx, prev_idx, next_idx, r_base, ring_h, path_w, rho)) {
-                                hit_layer = 2;
-                            } else if (onCurve(arr_high, idx, prev_idx, next_idx, r_base, ring_h, path_w, rho)) {
-                                hit_layer = 1;
+                            if (p.peak_mode == .ellipsis2) {
+                                // ellipsis2: mids are fully filled and sit ON TOP of both low & high outlines
+                                const mid_r = r_base + self.ell2_mid[idx] * ring_h;
+                                if (self.ell2_mid[idx] > 0.01 and rho <= mid_r + path_w) {
+                                    hit_layer = 4; // mid fill/outline overrides low & high
+                                } else if (onCurve(&self.ell2_low, idx, prev_idx, next_idx, r_base, ring_h, path_w, rho)) {
+                                    hit_layer = 3;
+                                } else if (onCurve(&self.ell2_high, idx, prev_idx, next_idx, r_base, ring_h, path_w, rho)) {
+                                    hit_layer = 1;
+                                }
+                            } else {
+                                // ellipsis: outlines only, priority low > mid > high
+                                if (onCurve(&self.path_low, idx, prev_idx, next_idx, r_base, ring_h, path_w, rho)) {
+                                    hit_layer = 3;
+                                } else if (onCurve(&self.path_mid, idx, prev_idx, next_idx, r_base, ring_h, path_w, rho)) {
+                                    hit_layer = 2;
+                                } else if (onCurve(&self.path_high, idx, prev_idx, next_idx, r_base, ring_h, path_w, rho)) {
+                                    hit_layer = 1;
+                                }
                             }
                         } else if (p.peak_mode == .path) {
                             const prev_idx: usize = if (idx == 0) ANG - 1 else idx - 1;
@@ -998,8 +1007,8 @@ pub const Renderer = struct {
                 cell.fg = if (path_lit > 0)
                     toRgb(.{ path_acc[0] / path_lit, path_acc[1] / path_lit, path_acc[2] / path_lit })
                 else switch (cell_layer) {
+                    4, 2 => band_mid_col,
                     3 => band_low_col,
-                    2 => band_mid_col,
                     1 => band_high_col,
                     else => toRgb(.{ acc[0] / lit, acc[1] / lit, acc[2] / lit }),
                 };
