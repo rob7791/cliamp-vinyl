@@ -664,7 +664,7 @@ pub const Renderer = struct {
         const rd_raw = if (p.viz_layout == .circular)
             rmax - ring_h - margin
         else
-            rmax * 0.86;
+            rmax;
         const ring_min: f32 = 0.35;
 
         var disc_col0: usize = 0;
@@ -696,12 +696,12 @@ pub const Renderer = struct {
             if (p.aurora and (self.sub_l > 0.004 or self.sub_r > 0.004)) {
                 self.drawAurora(s, s.rows, p.fx_color, p.aurora_gain);
             }
-            const excl_r = if (p.viz_layout == .circular) r0 + ring_min else rd + 1.0;
+            const excl_r = if (p.viz_layout == .circular) r0 + ring_min + 1.0 else rd;
             if (p.wave_level > 0) {
                 self.drawFilaments(s, cx, cy, excl_r, k, s.rows, pal.c1, pal.c2, p.fx_color, p.wave_level);
             }
             if (p.ring_mode != .off) {
-                const ring_start = if (p.viz_layout == .circular) r0 + ring_min + ring_h else rd + margin;
+                const ring_start = if (p.viz_layout == .circular) r0 + ring_min + ring_h else rd;
                 self.drawKickRings(s, cx, cy, ring_start, ring_start, k, s.rows, pal.c1, pal.c2, p.fx_color, p.glow_gain);
             }
             if (p.star_level > 0) {
@@ -1274,7 +1274,7 @@ pub const Renderer = struct {
             .{ 255, 255, 150 } // luminous starlight yellow (coherent with high-freq yellow)
         else
             mix3(c2, .{ 255, 255, 255 }, 0.68);
-        const excl_r2 = (excl_r + 1.2) * (excl_r + 1.2);
+        const excl_r2 = excl_r * excl_r;
         const glyphs = [4]u21{ 0x00B7, 0x22C6, 0x2727, 0x2726 }; // · ⋆ ✧ ✦
 
         for (self.stars) |st| {
@@ -1479,7 +1479,7 @@ pub const Renderer = struct {
         const rows_f: f32 = @floatFromInt(vis_rows);
         const inv_cols = 1.0 / cols_f;
         const inv_rows = 1.0 / rows_f;
-        const excl_r2 = (excl_r + 1.0) * (excl_r + 1.0);
+        const excl_r2 = excl_r * excl_r;
         // Very subtle low-opacity core + even fainter soft halo around it
         const base_alpha = std.math.clamp(0.055 + @as(f32, @floatFromInt(level)) * 0.0085, 0.05, 0.14);
         const halo_gain = base_alpha * 0.15;
