@@ -378,7 +378,7 @@ pub fn main() !void {
                     hud_msg = switch (ring_mode) {
                         .off => " rings: off ",
                         .kick => " rings: kick ",
-                        .mid => " rings: mid ",
+                        .mid => " rings: vocal ",
                     };
                     hud_timer = 2.0;
                 },

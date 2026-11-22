@@ -255,7 +255,8 @@ pub const Renderer = struct {
     fil_accum: f32 = 0,
     filaments: [MAX_FILAMENTS]Filament = [_]Filament{.{}} ** MAX_FILAMENTS,
     kick_ring_cd: f32 = 0,
-    mid_ring_accum: f32 = 0,
+    vocal_avg: f32 = 0,
+    vocal_ring_cd: f32 = 0,
     kick_rings_pool: [MAX_KICK_RINGS]KickRing = [_]KickRing{.{}} ** MAX_KICK_RINGS,
     tex_size_for: usize = 0,
     img_gen: u64 = 0,
@@ -385,6 +386,11 @@ pub const Renderer = struct {
         var sus_u_num: f32 = 0;
         var sus_u_den: f32 = 0;
         var sus_cnt: f32 = 0;
+        // Singing vocal presence band (~700 Hz – 3.5 kHz, u in [0.52, 0.77]) weighted for center-panned voice (L ≈ R)
+        var voc_sum: f32 = 0;
+        var voc_u_num: f32 = 0;
+        var voc_u_den: f32 = 0;
+        var voc_cnt: f32 = 0;
         for (0..n) |i| {
             const u = if (n > 1) @as(f32, @floatFromInt(i)) / nf else 0.0;
             const mono = 0.5 * (raw_l[i] + raw_r[i]);
@@ -407,6 +413,16 @@ pub const Renderer = struct {
                 sus_u_num += u * mono;
                 sus_u_den += mono;
                 sus_cnt += 1.0;
+            }
+            if (u >= 0.52 and u <= 0.77) {
+                // Lead vocals are center-panned (min(L,R) high, |L-R| low)
+                const center = @min(raw_l[i], raw_r[i]);
+                const side = @abs(raw_l[i] - raw_r[i]);
+                const vbar = @max(0.0, center - side * 0.65);
+                voc_sum += vbar;
+                voc_u_num += u * vbar;
+                voc_u_den += vbar;
+                voc_cnt += 1.0;
             }
             if (u >= 0.60 and u <= 0.85) {
                 tonal_hi_sum += mono;
@@ -532,27 +548,28 @@ pub const Renderer = struct {
         const sus_pitch: f32 = std.math.clamp((sus_dom_u - 0.40) / 0.32, 0.0, 1.0);
         self.updateFilaments(p.dt, sus_l, sus_r, sus_e, sus_pitch, p.wave_level);
 
-        // Mid-driven concentric rings (when ring_mode == .mid)
-        if (p.ring_mode == .mid and self.mid_sustain >= 0.04) {
-            const lv_f: f32 = @floatFromInt(@max(@as(u8, 1), p.wave_level));
-            self.mid_ring_accum += p.dt * @max(0.25, self.mid_sustain) * (1.2 + lv_f * 0.65);
-            if (self.mid_ring_accum >= 1.0) {
-                self.mid_ring_accum -= 1.0;
-                for (&self.kick_rings_pool) |*kr| {
-                    if (!kr.active) {
-                        kr.* = .{
-                            .age = 0,
-                            .max_life = 1.45,
-                            .strength = std.math.clamp(0.45 + self.mid_sustain * 0.85, 0.4, 1.0),
-                            .dom_u = sus_dom_u,
-                            .active = true,
-                        };
-                        break;
-                    }
+        // Singing-voice driven concentric rings (center-panned 700 Hz – 3.5 kHz vocal formants)
+        if (self.vocal_ring_cd > 0) self.vocal_ring_cd = @max(0.0, self.vocal_ring_cd - p.dt);
+        const voc_e: f32 = if (voc_cnt > 0) std.math.clamp(voc_sum / voc_cnt, 0, 1) else 0;
+        const voc_flux: f32 = @max(0.0, voc_e - self.vocal_avg);
+        self.vocal_avg += (voc_e - self.vocal_avg) * @min(1.0, p.dt * 5.0);
+        const voc_dom_u: f32 = if (voc_u_den > 1e-4) voc_u_num / voc_u_den else 0.62;
+        if (p.ring_mode == .mid and self.vocal_ring_cd <= 0 and
+            ((voc_flux > 0.045 and voc_e > 0.14) or voc_e > 0.34))
+        {
+            for (&self.kick_rings_pool) |*kr| {
+                if (!kr.active) {
+                    kr.* = .{
+                        .age = 0,
+                        .max_life = 1.40,
+                        .strength = std.math.clamp(0.42 + voc_e * 0.65 + voc_flux * 1.4, 0.38, 1.0),
+                        .dom_u = voc_dom_u,
+                        .active = true,
+                    };
+                    self.vocal_ring_cd = 0.18;
+                    break;
                 }
             }
-        } else {
-            self.mid_ring_accum = 0;
         }
 
         for (0..ANG) |a| {
@@ -1816,7 +1833,7 @@ pub const Renderer = struct {
                 " 1/2 3/4 intensità glow / aurora",
                 " 5 / 6   quantità stelline (0..10)",
                 " 7 / 8   filamenti medi (0..10)",
-                " 9       cerchi kick / mid / off",
+                " 9       cerchi kick / vocal / off",
                 " c       colori fx cover/freq",
                 " d / x   risoluzione / AA disco",
                 " o       stile cover/vinyl/v.art/CD",
