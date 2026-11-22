@@ -535,6 +535,7 @@ pub const Renderer = struct {
                 const side: usize = std.math.clamp(est_px, 128, mode_cap) & ~@as(usize, 1);
                 self.ensureTextures(@min(art.SRC, side));
                 if (self.img != null and self.tex.size > 0) {
+                    const eff_angle: f32 = if (p.disc_style == .cover) 0.0 else p.angle;
                     const dirty = p.force_redraw or !self.disc_active or
                         self.last_col0 != disc_col0 or self.last_row0 != disc_row0 or
                         self.last_disc_cols != disc_cols or self.last_disc_rows != disc_rows or
@@ -542,7 +543,7 @@ pub const Renderer = struct {
                         self.last_img_gen != self.img_gen or self.last_sheen != p.sheen or
                         self.last_aa != p.aa or self.last_style != p.disc_style or
                         self.fade < 1.0 or self.last_fade < 1.0 or
-                        p.angle != self.last_angle;
+                        eff_angle != self.last_angle;
                     if (dirty) {
                         enc.ensureSize(side) catch {};
                         if (enc.rgba.len == side * side * 4) {
@@ -557,7 +558,7 @@ pub const Renderer = struct {
                             self.last_disc_rows = disc_rows;
                             self.last_side = side;
                             self.last_aspect = k;
-                            self.last_angle = p.angle;
+                            self.last_angle = eff_angle;
                             self.last_fade = self.fade;
                             self.last_img_gen = self.img_gen;
                             self.last_sheen = p.sheen;
@@ -619,12 +620,16 @@ pub const Renderer = struct {
         const inv_side = 1.0 / @as(f32, @floatFromInt(side));
         const px_step = @max(box_w, box_h) * inv_side;
         const aa_half: f32 = if (aa) px_step * 0.5 else 0.0;
-        const hole_r: f32 = if (style == .cd) rd * 0.125 else rh;
+        const hole_r: f32 = switch (style) {
+            .cover => 0.0,
+            .cd => rd * 0.125,
+            .vinyl, .vinyl_art => rh,
+        };
         const outer_hi = rd + aa_half;
         const outer_lo = rd - aa_half;
         const outer_hi2 = outer_hi * outer_hi;
-        const inner_lo = @max(0.0, hole_r - aa_half);
-        const inner_hi = hole_r + aa_half;
+        const inner_lo = if (hole_r > 0.0) @max(0.0, hole_r - aa_half) else 0.0;
+        const inner_hi = if (hole_r > 0.0) hole_r + aa_half else 0.0;
         const sheen_cx: f32 = 0.65998315;
         const sheen_sy: f32 = 0.7512804;
 
@@ -644,7 +649,7 @@ pub const Renderer = struct {
                     continue;
                 }
                 const rho = @sqrt(d2);
-                if (rho <= inner_lo) {
+                if (hole_r > 0.0 and rho <= inner_lo) {
                     self.disc_alpha[idx] = 0;
                     self.disc_sheen[idx] = 0;
                     self.disc_zone[idx] = 0;
@@ -652,7 +657,7 @@ pub const Renderer = struct {
                     continue;
                 }
                 const outer_a: f32 = if (!aa or rho <= outer_lo) 1.0 else smoothstep(outer_hi, outer_lo, rho);
-                const inner_a: f32 = if (!aa or rho >= inner_hi) 1.0 else smoothstep(inner_lo, inner_hi, rho);
+                const inner_a: f32 = if (hole_r == 0.0 or !aa or rho >= inner_hi) 1.0 else smoothstep(inner_lo, inner_hi, rho);
                 const base_a = outer_a * inner_a;
                 const rn = rho * inv_rd;
 
@@ -757,8 +762,9 @@ pub const Renderer = struct {
         self.ensureDiscLut(side, box_w, box_h, rd, rh, p.aa, p.disc_style);
         if (self.disc_alpha.len != side * side) return;
 
-        const ca = @cos(p.angle);
-        const sa = @sin(p.angle);
+        const eff_angle: f32 = if (p.disc_style == .cover) 0.0 else p.angle;
+        const ca = @cos(eff_angle);
+        const sa = @sin(eff_angle);
         const inv_rd = 1.0 / rd;
         const inv_side = 1.0 / @as(f32, @floatFromInt(side));
         const dx_step = box_w * inv_side;
@@ -1475,17 +1481,29 @@ test "rasterizeDiscRgba produces transparent corners and spindle hole" {
         .fps = 60,
         .bg_mode = .tint,
         .cava_ok = true,
+        .disc_style = .vinyl,
     };
     r.rasterizeDiscRgba(rgba, side, 20.0, 20.0, 10.0, 1.0, &p);
 
     // Top-left corner (0, 0) must be transparent
     try std.testing.expectEqual(@as(u8, 0), rgba[3]);
-    // Center pixel (32, 32) inside spindle hole must be transparent
+    // Center pixel (32, 32) inside spindle hole must be transparent in vinyl mode
     const center_o = (32 * side + 32) * 4;
     try std.testing.expectEqual(@as(u8, 0), rgba[center_o + 3]);
     // Mid-radius pixel (48, 32) on disc body must be opaque
     const body_o = (32 * side + 48) * 4;
     try std.testing.expectEqual(@as(u8, 255), rgba[body_o + 3]);
+
+    // Cover mode has no center hole and never rotates regardless of angle
+    var p_cov = p;
+    p_cov.disc_style = .cover;
+    p_cov.angle = 0.0;
+    r.rasterizeDiscRgba(rgba, side, 20.0, 20.0, 10.0, 1.0, &p_cov);
+    try std.testing.expectEqual(@as(u8, 255), rgba[center_o + 3]);
+    const ref_r = rgba[(20 * side + 28) * 4];
+    p_cov.angle = 1.7;
+    r.rasterizeDiscRgba(rgba, side, 20.0, 20.0, 10.0, 1.0, &p_cov);
+    try std.testing.expectEqual(ref_r, rgba[(20 * side + 28) * 4]);
 }
 
 test "render aligns Kitty disc with circular Braille ring without overlap" {
