@@ -10,7 +10,7 @@ const Screen = scr.Screen;
 const ANG = 1440;
 const TAU: f32 = std.math.tau;
 const MAX_STARS = 240;
-const MAX_FILAMENTS = 14;
+const MAX_FILAMENTS = 24;
 
 const Filament = struct {
     x0: f32 = 0.5, // horizontal center in [0.18, 0.82]
@@ -604,7 +604,7 @@ pub const Renderer = struct {
                 self.drawAurora(s, s.rows, p.fx_color, p.aurora_gain);
             }
             if (p.wave_level > 0) {
-                self.drawFilaments(s, s.rows, pal.c1, pal.c2, p.fx_color, p.wave_level);
+                self.drawFilaments(s, cx, cy, r0 + ring_min, k, s.rows, pal.c1, pal.c2, p.fx_color, p.wave_level);
             }
             if (p.star_level > 0) {
                 self.drawStars(s, cx, cy, r0 + ring_min, k, pal.c2, p.viz_color);
@@ -1202,15 +1202,15 @@ pub const Renderer = struct {
     }
 
     fn updateFilaments(self: *Renderer, dt: f32, sus_l: f32, sus_r: f32, sus_e: f32, level: u8) void {
-        // Sustain detector: ignores brief percussive hits, ramps up on continuous held piano/brass/sax notes
-        if (sus_e > 0.16) {
+        // Sensitive sustain detector: very low sustain threshold (~40-140ms) for piano, trumpet, sax phrases
+        if (sus_e > 0.06) {
             self.mid_hold = @min(2.0, self.mid_hold + dt);
-            const sustain_gate = smoothstep(0.14, 0.42, self.mid_hold);
+            const sustain_gate = smoothstep(0.04, 0.14, self.mid_hold);
             const target = sus_e * sustain_gate;
-            self.mid_sustain += (target - self.mid_sustain) * @min(1.0, dt * 3.0);
+            self.mid_sustain += (target - self.mid_sustain) * @min(1.0, dt * 6.0);
         } else {
-            self.mid_hold *= @exp(-dt * 5.5);
-            self.mid_sustain *= @exp(-dt * 2.2);
+            self.mid_hold *= @exp(-dt * 5.0);
+            self.mid_sustain *= @exp(-dt * 2.8);
         }
 
         // Advance active rising filaments
@@ -1218,20 +1218,21 @@ pub const Renderer = struct {
             if (!f.active) continue;
             f.age += dt;
             f.y_head -= f.speed * dt;
-            f.phase += dt * 3.4;
+            f.phase += dt * 4.2;
             if (f.y_head + f.len < -0.05) {
                 f.active = false;
             }
         }
 
-        if (level == 0 or self.mid_sustain < 0.12) {
+        if (level == 0 or self.mid_sustain < 0.04) {
             self.fil_accum = 0;
             return;
         }
 
         const lv_f: f32 = @floatFromInt(level);
-        self.fil_accum += dt * self.mid_sustain * (0.9 + lv_f * 0.55);
-        while (self.fil_accum >= 1.0) {
+        self.fil_accum += dt * @max(0.25, self.mid_sustain) * (1.8 + lv_f * 1.15);
+        var spawned: usize = 0;
+        while (self.fil_accum >= 1.0 and spawned < 3) : (spawned += 1) {
             self.fil_accum -= 1.0;
             var slot: ?*Filament = null;
             for (&self.filaments) |*f| {
@@ -1243,26 +1244,26 @@ pub const Renderer = struct {
             const f = slot orelse break;
             const total = sus_l + sus_r + 1e-4;
             const bal = (sus_r - sus_l) / total; // -1 left .. +1 right
-            // Random anchor in central zone [0.20 .. 0.80], gently nudged by stereo mid balance
-            const base_x = 0.22 + self.nextRand() * 0.56 + bal * 0.08;
+            // Random anchor in central zone [0.16 .. 0.84], nudged by stereo mid balance
+            const base_x = 0.20 + self.nextRand() * 0.60 + bal * 0.08;
             f.* = .{
-                .x0 = std.math.clamp(base_x, 0.16, 0.84),
-                .y_head = 1.04,
-                .len = 0.30 + self.nextRand() * 0.26,
-                .width = 0.026 + self.nextRand() * 0.024,
-                .sway = 0.028 + self.nextRand() * 0.036,
-                .freq = 5.5 + self.nextRand() * 4.5,
-                .speed = 0.26 + self.nextRand() * 0.20,
+                .x0 = std.math.clamp(base_x, 0.14, 0.86),
+                .y_head = 1.02,
+                .len = 0.24 + self.nextRand() * 0.26,
+                .width = 0.65 + self.nextRand() * 0.45, // thin thickness in Braille sub-dot units (~1 dot wide)
+                .sway = 0.018 + self.nextRand() * 0.028,
+                .freq = 7.5 + self.nextRand() * 6.5,
+                .speed = 0.30 + self.nextRand() * 0.24,
                 .phase = self.nextRand() * TAU,
                 .age = 0,
-                .strength = std.math.clamp(0.45 + self.mid_sustain * 0.75, 0.4, 1.0),
+                .strength = std.math.clamp(0.45 + self.mid_sustain * 0.85, 0.4, 1.0),
                 .active = true,
             };
         }
     }
 
-    /// Renders soft rising wave-like background filaments (aurora-style) for sustained piano/brass/sax mids.
-    fn drawFilaments(self: *const Renderer, s: *Screen, vis_rows: usize, c1: [3]f32, c2: [3]f32, fx_color: FxColorMode, level: u8) void {
+    /// Renders thin, crisp, low-opacity translucent Braille wave filaments rising from bottom to top.
+    fn drawFilaments(self: *const Renderer, s: *Screen, cx: f32, cy: f32, excl_r: f32, k: f32, vis_rows: usize, c1: [3]f32, c2: [3]f32, fx_color: FxColorMode, level: u8) void {
         if (s.cols < 8 or vis_rows < 4 or level == 0) return;
         var any = false;
         for (self.filaments) |f| {
@@ -1274,45 +1275,77 @@ pub const Renderer = struct {
         if (!any) return;
 
         const fil_col: [3]f32 = if (fx_color == .spectrum)
-            .{ 18, 172, 172 } // luminous teal coherent with mid-frequency band
+            .{ 30, 190, 190 } // crisp translucent teal
         else
-            mix3(mix3(c1, c2, 0.55), .{ 240, 235, 220 }, 0.22);
+            mix3(mix3(c1, c2, 0.55), .{ 245, 240, 230 }, 0.32);
 
-        const gain = std.math.clamp(0.28 + @as(f32, @floatFromInt(level)) * 0.075, 0.2, 0.85);
-        const inv_cols = 1.0 / @as(f32, @floatFromInt(s.cols));
-        const inv_rows = 1.0 / @as(f32, @floatFromInt(vis_rows));
+        const dot_bits = [4][2]u8{ .{ 0x01, 0x08 }, .{ 0x02, 0x10 }, .{ 0x04, 0x20 }, .{ 0x40, 0x80 } };
+        const cols_f: f32 = @floatFromInt(s.cols);
+        const rows_f: f32 = @floatFromInt(vis_rows);
+        const inv_cols = 1.0 / cols_f;
+        const inv_rows = 1.0 / rows_f;
+        const excl_r2 = (excl_r + 1.0) * (excl_r + 1.0);
+        // Subtle low-opacity translucency (scales gently with level 1..10)
+        const base_alpha = std.math.clamp(0.18 + @as(f32, @floatFromInt(level)) * 0.028, 0.16, 0.44);
 
         for (0..vis_rows) |r| {
-            const ny = (@as(f32, @floatFromInt(r)) + 0.5) * inv_rows;
-            // Quick row check: gather only filaments whose vertical span covers ny
+            const cell_y0 = @as(f32, @floatFromInt(r));
+            const ny_mid = (cell_y0 + 0.5) * inv_rows;
+            // Quick skip if no active filament covers this row
+            var row_active = false;
+            for (self.filaments) |f| {
+                if (f.active and ny_mid >= f.y_head - 0.03 and ny_mid <= f.y_head + f.len + 0.03) {
+                    row_active = true;
+                    break;
+                }
+            }
+            if (!row_active) continue;
+
             for (0..s.cols) |c| {
-                const nx = (@as(f32, @floatFromInt(c)) + 0.5) * inv_cols;
-                var acc_a: f32 = 0;
+                // Skip disc interior and already occupied cells
+                const ddx = @as(f32, @floatFromInt(c)) + 0.5 - cx;
+                const ddy = (cell_y0 + 0.5) * k - cy;
+                if (ddx * ddx + ddy * ddy < excl_r2) continue;
+                const cell = s.at(c, r);
+                if (cell.cp != ' ') continue;
+
+                var bits: u8 = 0;
+                var max_a: f32 = 0;
+                const cell_x0 = @as(f32, @floatFromInt(c));
+
                 for (self.filaments) |f| {
                     if (!f.active) continue;
                     const y_tail = f.y_head + f.len;
-                    if (ny < f.y_head or ny > y_tail) continue;
-                    // Position along filament: 0 at leading head, 1 at trailing tail
-                    const along = (ny - f.y_head) / f.len;
-                    // Sinusoidal brass-wave horizontal displacement propagating upward
-                    const wave_x = f.x0 + f.sway * @sin(ny * f.freq + f.phase) * (0.45 + 0.55 * along);
-                    const dx = @abs(nx - wave_x);
-                    const local_w = f.width * (0.75 + 0.55 * @sin(along * std.math.pi));
-                    if (dx > local_w * 2.4) continue;
+                    if (ny_mid < f.y_head - 0.03 or ny_mid > y_tail + 0.03) continue;
+                    // Quick horizontal bounding check
+                    const nx_cell = (cell_x0 + 0.5) * inv_cols;
+                    if (@abs(nx_cell - f.x0) > f.sway + 2.5 * inv_cols) continue;
 
-                    const cross = @exp(-std.math.pow(f32, dx / local_w, 2.0));
-                    // Smooth fade at head, tail, entry (fade-in), and near top exit
-                    const env_along = smoothstep(0.0, 0.18, along) * smoothstep(1.0, 0.22, along);
-                    const fade_in = smoothstep(0.0, 0.45, f.age);
-                    const top_fade = smoothstep(0.0, 0.16, ny);
-                    acc_a += f.strength * cross * env_along * fade_in * top_fade;
+                    const fade_in = smoothstep(0.0, 0.35, f.age);
+                    const half_w_cols = f.width * 0.42; // thin, crisp (~0.3–0.5 cell = ~1 Braille dot)
+
+                    for (0..4) |j| {
+                        const sy = cell_y0 + 0.125 + 0.25 * @as(f32, @floatFromInt(j));
+                        const ny = sy * inv_rows;
+                        if (ny < f.y_head or ny > y_tail) continue;
+                        const along = (ny - f.y_head) / f.len;
+                        const wave_x_cols = (f.x0 + f.sway * @sin(ny * f.freq + f.phase) * (0.4 + 0.6 * along)) * cols_f;
+                        for (0..2) |i| {
+                            const sx = cell_x0 + 0.25 + 0.5 * @as(f32, @floatFromInt(i));
+                            if (@abs(sx - wave_x_cols) <= half_w_cols) {
+                                bits |= dot_bits[j][i];
+                                const env_along = smoothstep(0.0, 0.14, along) * smoothstep(1.0, 0.18, along);
+                                const top_fade = smoothstep(0.0, 0.15, ny);
+                                const a = f.strength * env_along * fade_in * top_fade;
+                                if (a > max_a) max_a = a;
+                            }
+                        }
+                    }
                 }
-                if (acc_a <= 0.01) continue;
-                const amt = std.math.clamp(acc_a * gain, 0.0, 0.72);
-                const cell = s.at(c, r);
-                const bg = toRgb(mix3(toF(cell.bg), fil_col, amt));
-                cell.bg = bg;
-                if (cell.cp == ' ') cell.fg = bg;
+                if (bits == 0 or max_a <= 0.02) continue;
+                const alpha = std.math.clamp(max_a * base_alpha, 0.0, 0.48);
+                cell.cp = 0x2800 + @as(u21, bits);
+                cell.fg = toRgb(mix3(toF(cell.bg), fil_col, alpha));
             }
         }
     }
