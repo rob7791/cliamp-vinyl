@@ -9,7 +9,7 @@ const Screen = scr.Screen;
 
 const ANG = 1440;
 const TAU: f32 = std.math.tau;
-const MAX_STARS = 72;
+const MAX_STARS = 240;
 
 const Star = struct {
     x: f32 = 0, // normalized 0..1 across screen
@@ -174,7 +174,7 @@ pub const Params = struct {
     viz_color: VizColor = .freq,
     glow: bool = true,
     aurora: bool = true,
-    stars: bool = true,
+    star_level: u8 = 3,
     glow_gain: f32 = 1.0,
     aurora_gain: f32 = 1.0,
     fx_color: FxColorMode = .cover,
@@ -439,7 +439,7 @@ pub const Renderer = struct {
         const air_e: f32 = 0.5 * (air_l + air_r);
         const air_flux: f32 = @max(0.0, air_e - self.air_avg);
         self.air_avg += (air_e - self.air_avg) * @min(1.0, p.dt * 7.0);
-        self.updateStars(p.dt, air_l, air_r, air_e, air_flux, p.stars);
+        self.updateStars(p.dt, air_l, air_r, air_e, air_flux, p.star_level);
 
         for (0..ANG) |a| {
             const th = (@as(f32, @floatFromInt(a)) + 0.5) / ANG * TAU;
@@ -557,7 +557,7 @@ pub const Renderer = struct {
             if (p.aurora and (self.sub_l > 0.004 or self.sub_r > 0.004)) {
                 self.drawAurora(s, s.rows, p.fx_color, p.aurora_gain);
             }
-            if (p.stars) {
+            if (p.star_level > 0) {
                 self.drawStars(s, cx, cy, r0 + ring_min, k, pal.c2, p.viz_color);
             }
             self.drawRing(s, &p, cx, cy, rd, r0, ring_h, ring_min, vis_rows, pal.c1, pal.c2, bgf);
@@ -1036,20 +1036,25 @@ pub const Renderer = struct {
         return @as(f32, @floatFromInt(self.star_rng & 0xFFFFFF)) / 16777216.0;
     }
 
-    fn updateStars(self: *Renderer, dt: f32, air_l: f32, air_r: f32, air_e: f32, air_flux: f32, enabled: bool) void {
+    fn updateStars(self: *Renderer, dt: f32, air_l: f32, air_r: f32, air_e: f32, air_flux: f32, level: u8) void {
         for (&self.stars) |*st| {
             if (st.life > 0) {
                 st.life = @max(0.0, st.life - dt);
                 st.phase += dt * 14.0;
             }
         }
-        if (!enabled) return;
+        if (level == 0) {
+            self.star_accum = 0;
+            return;
+        }
         const drive = std.math.clamp(air_e * 1.1 + air_flux * 3.8, 0.0, 2.5);
         if (drive < 0.09) return;
-        // Spawn rate proportional to high-frequency energy & cymbal/hi-hat transients
-        self.star_accum += dt * drive * 38.0;
+        const lv_f: f32 = @floatFromInt(level);
+        // Spawn rate and burst count scale with star_level (1..10)
+        self.star_accum += dt * drive * (lv_f * 14.0);
+        const max_spawns: usize = @as(usize, level) * 2;
         var spawns: usize = 0;
-        while (self.star_accum >= 1.0 and spawns < 4) : (spawns += 1) {
+        while (self.star_accum >= 1.0 and spawns < max_spawns) : (spawns += 1) {
             self.star_accum -= 1.0;
             // Find an inactive slot
             var slot: ?*Star = null;
@@ -1391,7 +1396,7 @@ pub const Renderer = struct {
                 " t / k   viz 1:1/smooth / colori",
                 " g / a   bagliore / aurora on/off",
                 " 1/2 3/4 intensità glow / aurora",
-                " * / e   stelline alte freq on/off",
+                " 5 / 6   quantità stelline (0..10)",
                 " c       colori fx cover/freq",
                 " d / x   risoluzione / AA disco",
                 " o       stile cover/vinyl/v.art/CD",

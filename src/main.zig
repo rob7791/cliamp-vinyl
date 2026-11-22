@@ -206,7 +206,7 @@ pub fn main() !void {
     var viz_color: render.VizColor = .freq;
     var glow = true;
     var aurora = true;
-    var stars = true;
+    var star_level: u8 = 3;
     var glow_gain: f32 = 1.0;
     var aurora_gain: f32 = 1.0;
     var fx_color: render.FxColorMode = .cover;
@@ -341,9 +341,17 @@ pub fn main() !void {
                     hud_msg = if (aurora) " aurora on " else " aurora off ";
                     hud_timer = 2.0;
                 },
-                '*', 'e' => {
-                    stars = !stars;
-                    hud_msg = if (stars) " stars on " else " stars off ";
+                '5' => {
+                    if (star_level > 0) star_level -= 1;
+                    hud_msg = if (star_level == 0)
+                        " stars: 0 (off) "
+                    else
+                        std.fmt.bufPrint(&hud_buf, " stars: {d} ", .{star_level}) catch " stars ";
+                    hud_timer = 2.0;
+                },
+                '6' => {
+                    if (star_level < 10) star_level += 1;
+                    hud_msg = std.fmt.bufPrint(&hud_buf, " stars: {d} ", .{star_level}) catch " stars ";
                     hud_timer = 2.0;
                 },
                 '1' => {
@@ -577,7 +585,7 @@ pub fn main() !void {
             .viz_color = viz_color,
             .glow = glow,
             .aurora = aurora,
-            .stars = stars,
+            .star_level = star_level,
             .glow_gain = glow_gain,
             .aurora_gain = aurora_gain,
             .fx_color = fx_color,
