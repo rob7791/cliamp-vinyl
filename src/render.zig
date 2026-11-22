@@ -335,7 +335,7 @@ pub const Renderer = struct {
         var kick_u_num: f32 = 0;
         var kick_u_den: f32 = 0;
         var kick_cnt: f32 = 0;
-        // Very high frequencies (~5–16 kHz, u >= 0.82) for twinkling stars/sparkles
+        // Ultra-high frequencies (~9.5–16 kHz, u >= 0.92): cymbals, hi-hat sizzle, chimes only
         var air_l_sum: f32 = 0;
         var air_r_sum: f32 = 0;
         var air_cnt: f32 = 0;
@@ -355,7 +355,7 @@ pub const Renderer = struct {
                 kick_u_den += mono;
                 kick_cnt += 1.0;
             }
-            if (u >= 0.82) {
+            if (u >= 0.92) {
                 air_l_sum += raw_l[i];
                 air_r_sum += raw_r[i];
                 air_cnt += 1.0;
@@ -1047,8 +1047,8 @@ pub const Renderer = struct {
             self.star_accum = 0;
             return;
         }
-        const drive = std.math.clamp(air_e * 1.1 + air_flux * 3.8, 0.0, 2.5);
-        if (drive < 0.09) return;
+        const drive = std.math.clamp(air_e * 0.9 + air_flux * 4.5, 0.0, 2.5);
+        if (drive < 0.12) return;
         const lv_f: f32 = @floatFromInt(level);
         // Spawn rate and burst count scale with star_level (1..10)
         self.star_accum += dt * drive * (lv_f * 14.0);
