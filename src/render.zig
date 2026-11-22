@@ -10,6 +10,21 @@ const Screen = scr.Screen;
 const ANG = 1440;
 const TAU: f32 = std.math.tau;
 const MAX_STARS = 240;
+const MAX_FILAMENTS = 14;
+
+const Filament = struct {
+    x0: f32 = 0.5, // horizontal center in [0.18, 0.82]
+    y_head: f32 = 1.1, // rises from ~1.05 upward past -0.4
+    len: f32 = 0.35, // tail length in screen-height units
+    width: f32 = 0.04, // half-width in screen-width units
+    sway: f32 = 0.04, // horizontal wave amplitude
+    freq: f32 = 7.0, // vertical wave spatial frequency
+    speed: f32 = 0.34, // upward speed (screen heights / sec)
+    phase: f32 = 0,
+    age: f32 = 0,
+    strength: f32 = 0,
+    active: bool = false,
+};
 
 const Star = struct {
     x: f32 = 0, // normalized 0..1 across screen
@@ -175,6 +190,7 @@ pub const Params = struct {
     glow: bool = true,
     aurora: bool = true,
     star_level: u8 = 3,
+    wave_level: u8 = 4,
     glow_gain: f32 = 1.0,
     aurora_gain: f32 = 1.0,
     fx_color: FxColorMode = .cover,
@@ -221,6 +237,10 @@ pub const Renderer = struct {
     star_accum: f32 = 0,
     star_cd: f32 = 0,
     stars: [MAX_STARS]Star = [_]Star{.{}} ** MAX_STARS,
+    mid_hold: f32 = 0,
+    mid_sustain: f32 = 0,
+    fil_accum: f32 = 0,
+    filaments: [MAX_FILAMENTS]Filament = [_]Filament{.{}} ** MAX_FILAMENTS,
     tex_size_for: usize = 0,
     img_gen: u64 = 0,
 
@@ -343,6 +363,10 @@ pub const Renderer = struct {
         var air_cnt: f32 = 0;
         var tonal_hi_sum: f32 = 0;
         var tonal_hi_cnt: f32 = 0;
+        // Musical mid-range (~300 Hz – 2.2 kHz, u in [0.40, 0.72]): piano, trumpet, saxophone
+        var sus_l_sum: f32 = 0;
+        var sus_r_sum: f32 = 0;
+        var sus_cnt: f32 = 0;
         for (0..n) |i| {
             const u = if (n > 1) @as(f32, @floatFromInt(i)) / nf else 0.0;
             const mono = 0.5 * (raw_l[i] + raw_r[i]);
@@ -358,6 +382,11 @@ pub const Renderer = struct {
                 kick_u_num += u * mono;
                 kick_u_den += mono;
                 kick_cnt += 1.0;
+            }
+            if (u >= 0.40 and u <= 0.72) {
+                sus_l_sum += raw_l[i];
+                sus_r_sum += raw_r[i];
+                sus_cnt += 1.0;
             }
             if (u >= 0.60 and u <= 0.85) {
                 tonal_hi_sum += mono;
@@ -451,6 +480,12 @@ pub const Renderer = struct {
         const air_flux: f32 = @max(0.0, air_e - self.air_avg);
         self.air_avg += (air_e - self.air_avg) * @min(1.0, p.dt * 8.0);
         self.updateStars(p.dt, air_l, air_r, air_e, air_flux, p.star_level);
+
+        // Sustained mid-range filament emitter (~300 Hz – 2.2 kHz: piano, trumpet, sax)
+        const sus_l: f32 = if (sus_cnt > 0) std.math.clamp(sus_l_sum / sus_cnt, 0, 1) else 0;
+        const sus_r: f32 = if (sus_cnt > 0) std.math.clamp(sus_r_sum / sus_cnt, 0, 1) else 0;
+        const sus_e: f32 = 0.5 * (sus_l + sus_r);
+        self.updateFilaments(p.dt, sus_l, sus_r, sus_e, p.wave_level);
 
         for (0..ANG) |a| {
             const th = (@as(f32, @floatFromInt(a)) + 0.5) / ANG * TAU;
@@ -567,6 +602,9 @@ pub const Renderer = struct {
             }
             if (p.aurora and (self.sub_l > 0.004 or self.sub_r > 0.004)) {
                 self.drawAurora(s, s.rows, p.fx_color, p.aurora_gain);
+            }
+            if (p.wave_level > 0) {
+                self.drawFilaments(s, s.rows, pal.c1, pal.c2, p.fx_color, p.wave_level);
             }
             if (p.star_level > 0) {
                 self.drawStars(s, cx, cy, r0 + ring_min, k, pal.c2, p.viz_color);
@@ -1163,6 +1201,122 @@ pub const Renderer = struct {
         }
     }
 
+    fn updateFilaments(self: *Renderer, dt: f32, sus_l: f32, sus_r: f32, sus_e: f32, level: u8) void {
+        // Sustain detector: ignores brief percussive hits, ramps up on continuous held piano/brass/sax notes
+        if (sus_e > 0.16) {
+            self.mid_hold = @min(2.0, self.mid_hold + dt);
+            const sustain_gate = smoothstep(0.14, 0.42, self.mid_hold);
+            const target = sus_e * sustain_gate;
+            self.mid_sustain += (target - self.mid_sustain) * @min(1.0, dt * 3.0);
+        } else {
+            self.mid_hold *= @exp(-dt * 5.5);
+            self.mid_sustain *= @exp(-dt * 2.2);
+        }
+
+        // Advance active rising filaments
+        for (&self.filaments) |*f| {
+            if (!f.active) continue;
+            f.age += dt;
+            f.y_head -= f.speed * dt;
+            f.phase += dt * 3.4;
+            if (f.y_head + f.len < -0.05) {
+                f.active = false;
+            }
+        }
+
+        if (level == 0 or self.mid_sustain < 0.12) {
+            self.fil_accum = 0;
+            return;
+        }
+
+        const lv_f: f32 = @floatFromInt(level);
+        self.fil_accum += dt * self.mid_sustain * (0.9 + lv_f * 0.55);
+        while (self.fil_accum >= 1.0) {
+            self.fil_accum -= 1.0;
+            var slot: ?*Filament = null;
+            for (&self.filaments) |*f| {
+                if (!f.active) {
+                    slot = f;
+                    break;
+                }
+            }
+            const f = slot orelse break;
+            const total = sus_l + sus_r + 1e-4;
+            const bal = (sus_r - sus_l) / total; // -1 left .. +1 right
+            // Random anchor in central zone [0.20 .. 0.80], gently nudged by stereo mid balance
+            const base_x = 0.22 + self.nextRand() * 0.56 + bal * 0.08;
+            f.* = .{
+                .x0 = std.math.clamp(base_x, 0.16, 0.84),
+                .y_head = 1.04,
+                .len = 0.30 + self.nextRand() * 0.26,
+                .width = 0.026 + self.nextRand() * 0.024,
+                .sway = 0.028 + self.nextRand() * 0.036,
+                .freq = 5.5 + self.nextRand() * 4.5,
+                .speed = 0.26 + self.nextRand() * 0.20,
+                .phase = self.nextRand() * TAU,
+                .age = 0,
+                .strength = std.math.clamp(0.45 + self.mid_sustain * 0.75, 0.4, 1.0),
+                .active = true,
+            };
+        }
+    }
+
+    /// Renders soft rising wave-like background filaments (aurora-style) for sustained piano/brass/sax mids.
+    fn drawFilaments(self: *const Renderer, s: *Screen, vis_rows: usize, c1: [3]f32, c2: [3]f32, fx_color: FxColorMode, level: u8) void {
+        if (s.cols < 8 or vis_rows < 4 or level == 0) return;
+        var any = false;
+        for (self.filaments) |f| {
+            if (f.active) {
+                any = true;
+                break;
+            }
+        }
+        if (!any) return;
+
+        const fil_col: [3]f32 = if (fx_color == .spectrum)
+            .{ 18, 172, 172 } // luminous teal coherent with mid-frequency band
+        else
+            mix3(mix3(c1, c2, 0.55), .{ 240, 235, 220 }, 0.22);
+
+        const gain = std.math.clamp(0.28 + @as(f32, @floatFromInt(level)) * 0.075, 0.2, 0.85);
+        const inv_cols = 1.0 / @as(f32, @floatFromInt(s.cols));
+        const inv_rows = 1.0 / @as(f32, @floatFromInt(vis_rows));
+
+        for (0..vis_rows) |r| {
+            const ny = (@as(f32, @floatFromInt(r)) + 0.5) * inv_rows;
+            // Quick row check: gather only filaments whose vertical span covers ny
+            for (0..s.cols) |c| {
+                const nx = (@as(f32, @floatFromInt(c)) + 0.5) * inv_cols;
+                var acc_a: f32 = 0;
+                for (self.filaments) |f| {
+                    if (!f.active) continue;
+                    const y_tail = f.y_head + f.len;
+                    if (ny < f.y_head or ny > y_tail) continue;
+                    // Position along filament: 0 at leading head, 1 at trailing tail
+                    const along = (ny - f.y_head) / f.len;
+                    // Sinusoidal brass-wave horizontal displacement propagating upward
+                    const wave_x = f.x0 + f.sway * @sin(ny * f.freq + f.phase) * (0.45 + 0.55 * along);
+                    const dx = @abs(nx - wave_x);
+                    const local_w = f.width * (0.75 + 0.55 * @sin(along * std.math.pi));
+                    if (dx > local_w * 2.4) continue;
+
+                    const cross = @exp(-std.math.pow(f32, dx / local_w, 2.0));
+                    // Smooth fade at head, tail, entry (fade-in), and near top exit
+                    const env_along = smoothstep(0.0, 0.18, along) * smoothstep(1.0, 0.22, along);
+                    const fade_in = smoothstep(0.0, 0.45, f.age);
+                    const top_fade = smoothstep(0.0, 0.16, ny);
+                    acc_a += f.strength * cross * env_along * fade_in * top_fade;
+                }
+                if (acc_a <= 0.01) continue;
+                const amt = std.math.clamp(acc_a * gain, 0.0, 0.72);
+                const cell = s.at(c, r);
+                const bg = toRgb(mix3(toF(cell.bg), fil_col, amt));
+                cell.bg = bg;
+                if (cell.cp == ' ') cell.fg = bg;
+            }
+        }
+    }
+
     fn drawRing(self: *Renderer, s: *Screen, p: *const Params, cx: f32, cy: f32, rd: f32, r0: f32, ring_h: f32, ring_min: f32, vis_rows: usize, c1: [3]f32, c2: [3]f32, bgf: [3]f32) void {
         _ = bgf;
         const k = p.aspect;
@@ -1436,6 +1590,7 @@ pub const Renderer = struct {
                 " g / a   bagliore / aurora on/off",
                 " 1/2 3/4 intensità glow / aurora",
                 " 5 / 6   quantità stelline (0..10)",
+                " 7 / 8   filamenti medi (0..10)",
                 " c       colori fx cover/freq",
                 " d / x   risoluzione / AA disco",
                 " o       stile cover/vinyl/v.art/CD",

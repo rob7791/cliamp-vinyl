@@ -207,6 +207,7 @@ pub fn main() !void {
     var glow = true;
     var aurora = true;
     var star_level: u8 = 3;
+    var wave_level: u8 = 4;
     var glow_gain: f32 = 1.0;
     var aurora_gain: f32 = 1.0;
     var fx_color: render.FxColorMode = .cover;
@@ -352,6 +353,19 @@ pub fn main() !void {
                 '6' => {
                     if (star_level < 10) star_level += 1;
                     hud_msg = std.fmt.bufPrint(&hud_buf, " stars: {d} ", .{star_level}) catch " stars ";
+                    hud_timer = 2.0;
+                },
+                '7' => {
+                    if (wave_level > 0) wave_level -= 1;
+                    hud_msg = if (wave_level == 0)
+                        " waves: 0 (off) "
+                    else
+                        std.fmt.bufPrint(&hud_buf, " waves: {d} ", .{wave_level}) catch " waves ";
+                    hud_timer = 2.0;
+                },
+                '8' => {
+                    if (wave_level < 10) wave_level += 1;
+                    hud_msg = std.fmt.bufPrint(&hud_buf, " waves: {d} ", .{wave_level}) catch " waves ";
                     hud_timer = 2.0;
                 },
                 '1' => {
@@ -586,6 +600,7 @@ pub fn main() !void {
             .glow = glow,
             .aurora = aurora,
             .star_level = star_level,
+            .wave_level = wave_level,
             .glow_gain = glow_gain,
             .aurora_gain = aurora_gain,
             .fx_color = fx_color,
