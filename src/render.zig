@@ -99,6 +99,8 @@ pub const Texture = struct {
 
 pub const BgMode = enum { tint, black };
 pub const PeakMode = enum { ellipsis, path, peak };
+pub const VizMotion = enum { raw, smooth };
+pub const VizColor = enum { freq, cover };
 pub const FxColorMode = enum { cover, spectrum };
 pub const InfoMode = enum { auto, show, hide };
 pub const DiscRes = enum {
@@ -142,6 +144,8 @@ pub const Params = struct {
     bpm: f32 = 0,
     show_rpm: bool = false,
     peak_mode: PeakMode = .path,
+    viz_motion: VizMotion = .raw,
+    viz_color: VizColor = .freq,
     glow: bool = true,
     aurora: bool = true,
     fx_color: FxColorMode = .cover,
@@ -256,9 +260,11 @@ pub const Renderer = struct {
         const nf: f32 = @floatFromInt(n - 1);
         const raw_l = if (p.raw_left.len == n) p.raw_left else p.left;
         const raw_r = if (p.raw_right.len == n) p.raw_right else p.right;
+        const src_l = if (p.viz_motion == .raw) raw_l else p.left;
+        const src_r = if (p.viz_motion == .raw) raw_r else p.right;
         const decay = p.dt * 0.55;
 
-        // 1:1 raw band energies (low / mid / high) per channel, zero temporal smoothing
+        // Band energies (low / mid / high) per channel following selected viz_motion (raw 1:1 or smooth)
         var low_l: f32 = 0;
         var low_r: f32 = 0;
         var low_w: f32 = 0;
@@ -268,7 +274,7 @@ pub const Renderer = struct {
         var high_l: f32 = 0;
         var high_r: f32 = 0;
         var high_w: f32 = 0;
-        // Sub-bass (20–80 Hz) & kick drum (100–300 Hz) on cava's 20Hz–16000Hz log scale
+        // Sub-bass (20–80 Hz) & kick drum (100–300 Hz) always use raw unfiltered spectrum for punchy FX
         // 20–80 Hz => u in [0.0, 0.207]; 100–300 Hz => u in [0.241, 0.405]
         var sub_l_sum: f32 = 0;
         var sub_r_sum: f32 = 0;
@@ -301,14 +307,14 @@ pub const Renderer = struct {
             const wl = @exp(-(dl * dl));
             const wm = @exp(-(dm * dm));
             const wh = @exp(-(dh * dh));
-            low_l += raw_l[i] * wl;
-            low_r += raw_r[i] * wl;
+            low_l += src_l[i] * wl;
+            low_r += src_r[i] * wl;
             low_w += wl;
-            mid_l += raw_l[i] * wm;
-            mid_r += raw_r[i] * wm;
+            mid_l += src_l[i] * wm;
+            mid_r += src_r[i] * wm;
             mid_w += wm;
-            high_l += raw_l[i] * wh;
-            high_r += raw_r[i] * wh;
+            high_l += src_l[i] * wh;
+            high_r += src_r[i] * wh;
             high_w += wh;
         }
         if (low_w > 0) {
@@ -364,13 +370,18 @@ pub const Renderer = struct {
             const t = if (right_side) th / std.math.pi else (TAU - th) / std.math.pi; // 0 top, 1 bottom
             const u = if (p.bass_top) t else 1.0 - t; // 0 = bass pole, 0.5 = mid sides, 1 = high pole
             const fpos = u * nf;
-            const vr = catmull(p.right, fpos);
-            const vl = catmull(p.left, fpos);
             const s = smoothstep(0, 0.12, @min(t, 1 - t));
             const own = 0.5 + 0.5 * s;
-            var v = if (right_side) vr * own + vl * (1 - own) else vl * own + vr * (1 - own);
-            v = std.math.clamp(v, 0, 1);
+
+            const v: f32 = if (p.viz_motion == .raw)
+                std.math.clamp(if (right_side) linSample(raw_r, fpos) else linSample(raw_l, fpos), 0, 1)
+            else blk: {
+                const vr = catmull(p.right, fpos);
+                const vl = catmull(p.left, fpos);
+                break :blk std.math.clamp(if (right_side) vr * own + vl * (1 - own) else vl * own + vr * (1 - own), 0, 1);
+            };
             self.amp[a] = v;
+            self.raw_amp[a] = v;
             self.peak[a] = @max(v, self.peak[a] - decay);
 
             // Slightly deformed elliptical envelopes bulging toward each band's reference frequency
@@ -385,22 +396,20 @@ pub const Renderer = struct {
             const env_mid = 0.25 + 0.75 * std.math.pow(f32, s_mid, 1.4);
             const env_high = 0.25 + 0.75 * std.math.pow(f32, s_high, 1.4);
 
-            const raw_here = std.math.clamp(if (right_side) linSample(raw_r, fpos) else linSample(raw_l, fpos), 0, 1);
-            self.raw_amp[a] = raw_here;
-            const deform = 0.88 + 0.22 * raw_here;
+            const deform = 0.88 + 0.22 * v;
 
             const ell_low = el * env_low * deform * 1.15;
             const ell_mid = em * env_mid * deform * 1.15;
             const ell_high = eh * env_high * deform * 1.15;
 
-            // Union with direct 1:1 raw frequency peaks, partitioned by frequency zone (follows bass_top)
+            // Union with peaks partitioned by frequency zone (follows bass_top and viz_motion)
             const mask_low = 1.0 - smoothstep(0.32, 0.48, u);
             const mask_mid = smoothstep(0.22, 0.36, u) * (1.0 - smoothstep(0.64, 0.78, u));
             const mask_high = smoothstep(0.52, 0.68, u);
 
-            self.path_low[a] = std.math.clamp(@max(ell_low, raw_here * mask_low), 0, 1.0);
-            self.path_mid[a] = std.math.clamp(@max(ell_mid, raw_here * mask_mid), 0, 1.0);
-            self.path_high[a] = std.math.clamp(@max(ell_high, raw_here * mask_high), 0, 1.0);
+            self.path_low[a] = std.math.clamp(@max(ell_low, v * mask_low), 0, 1.0);
+            self.path_mid[a] = std.math.clamp(@max(ell_mid, v * mask_mid), 0, 1.0);
+            self.path_high[a] = std.math.clamp(@max(ell_high, v * mask_high), 0, 1.0);
         }
     }
 
@@ -806,9 +815,19 @@ pub const Renderer = struct {
         const peak_w = k * 0.13;
         const path_w = k * 0.14;
         const white = [3]f32{ 255, 255, 255 };
-        const band_low_col = Rgb{ .r = 102, .g = 51, .b = 153 }; // rebeccapurple
-        const band_mid_col = Rgb{ .r = 0, .g = 128, .b = 128 }; // teal
-        const band_high_col = Rgb{ .r = 255, .g = 255, .b = 0 }; // yellow
+        // Ellipsis 3-line colors: frequency palette (rebeccapurple/teal/yellow) or 3 tones of cover base color
+        const band_low_col: Rgb = if (p.viz_color == .freq)
+            .{ .r = 102, .g = 51, .b = 153 }
+        else
+            toRgb(mix3(c1, .{ 18, 12, 24 }, 0.42));
+        const band_mid_col: Rgb = if (p.viz_color == .freq)
+            .{ .r = 0, .g = 128, .b = 128 }
+        else
+            toRgb(c1);
+        const band_high_col: Rgb = if (p.viz_color == .freq)
+            .{ .r = 255, .g = 255, .b = 0 }
+        else
+            toRgb(mix3(c2, white, 0.52));
 
         var r = r_lo;
         while (r < r_hi) : (r += 1) {
@@ -869,18 +888,26 @@ pub const Renderer = struct {
                         } else if (p.peak_mode == .path) {
                             const prev_idx: usize = if (idx == 0) ANG - 1 else idx - 1;
                             const next_idx: usize = if (idx + 1 >= ANG) 0 else idx + 1;
-                            const r_cur = r0 + ring_min + self.raw_amp[idx] * ring_h;
-                            const r_prev = r0 + ring_min + self.raw_amp[prev_idx] * ring_h;
-                            const r_next = r0 + ring_min + self.raw_amp[next_idx] * ring_h;
+                            const r_cur = r0 + ring_min + self.amp[idx] * ring_h;
+                            const r_prev = r0 + ring_min + self.amp[prev_idx] * ring_h;
+                            const r_next = r0 + ring_min + self.amp[next_idx] * ring_h;
                             const mid_prev = (r_cur + r_prev) * 0.5;
                             const mid_next = (r_cur + r_next) * 0.5;
                             const seg_lo = @min(r_cur, @min(mid_prev, mid_next)) - path_w;
                             const seg_hi = @max(r_cur, @max(mid_prev, mid_next)) + path_w;
                             if ((rho >= seg_lo and rho <= seg_hi) or rho <= r_cur) {
-                                const right_side = th < std.math.pi;
-                                const t = if (right_side) th / std.math.pi else (TAU - th) / std.math.pi;
-                                const u = if (p.bass_top) t else 1.0 - t;
-                                const pc = pathBandColor(u);
+                                const pc: [3]f32 = if (p.viz_color == .freq) blk: {
+                                    const right_side = th < std.math.pi;
+                                    const t = if (right_side) th / std.math.pi else (TAU - th) / std.math.pi;
+                                    const u = if (p.bass_top) t else 1.0 - t;
+                                    break :blk pathBandColor(u);
+                                } else blk: {
+                                    const q = std.math.clamp((rho - r0) / ring_h, 0, 1);
+                                    var bc = mix3(c1, c2, q);
+                                    if (r_cur - rho < 0.6) bc = mix3(bc, white, 0.35);
+                                    const dim = 0.55 + 0.45 * std.math.clamp(v * 1.4 + 0.2, 0, 1);
+                                    break :blk .{ bc[0] * dim, bc[1] * dim, bc[2] * dim };
+                                };
                                 path_acc[0] += pc[0];
                                 path_acc[1] += pc[1];
                                 path_acc[2] += pc[2];
@@ -900,15 +927,31 @@ pub const Renderer = struct {
                         } else if (p.peak_mode != .peak) {
                             continue;
                         } else if (rho <= top) {
-                            const q = std.math.clamp((rho - r0) / ring_h, 0, 1);
-                            col = mix3(c1, c2, q);
-                            if (top - rho < 0.6) col = mix3(col, white, 0.35);
-                            const dim = 0.55 + 0.45 * std.math.clamp(v * 1.4 + 0.2, 0, 1);
-                            col = .{ col[0] * dim, col[1] * dim, col[2] * dim };
+                            if (p.viz_color == .freq) {
+                                const right_side = th < std.math.pi;
+                                const t = if (right_side) th / std.math.pi else (TAU - th) / std.math.pi;
+                                const u = if (p.bass_top) t else 1.0 - t;
+                                col = pathBandColor(u);
+                                const dim = 0.65 + 0.35 * std.math.clamp(v * 1.3 + 0.15, 0, 1);
+                                col = .{ col[0] * dim, col[1] * dim, col[2] * dim };
+                            } else {
+                                const q = std.math.clamp((rho - r0) / ring_h, 0, 1);
+                                col = mix3(c1, c2, q);
+                                if (top - rho < 0.6) col = mix3(col, white, 0.35);
+                                const dim = 0.55 + 0.45 * std.math.clamp(v * 1.4 + 0.2, 0, 1);
+                                col = .{ col[0] * dim, col[1] * dim, col[2] * dim };
+                            }
                         } else if (p.peak_mode == .peak) {
                             const pk = r0 + ring_min + self.peak[idx] * ring_h + peak_w * 1.5;
                             if (@abs(rho - pk) < peak_w and self.peak[idx] > v + 0.02) {
-                                col = mix3(c2, white, 0.5);
+                                if (p.viz_color == .freq) {
+                                    const right_side = th < std.math.pi;
+                                    const t = if (right_side) th / std.math.pi else (TAU - th) / std.math.pi;
+                                    const u = if (p.bass_top) t else 1.0 - t;
+                                    col = mix3(pathBandColor(u), white, 0.45);
+                                } else {
+                                    col = mix3(c2, white, 0.5);
+                                }
                             } else continue;
                         } else continue;
                         bits |= dot_bits[j][i];
@@ -988,6 +1031,7 @@ pub const Renderer = struct {
                 " [ / ]   spin ∓5 RPM ({/} ∓1)",
                 " v / 0   preset RPM / reset",
                 " w       path / ellipsis / peak",
+                " t / k   viz 1:1/smooth / colori",
                 " g       bagliore cassa on/off",
                 " a       aurora sub-bass on/off",
                 " c       colori fx cover/freq",

@@ -202,6 +202,8 @@ pub fn main() !void {
     var rpm: f32 = opts.rpm orelse default_rpm;
     var rpm_hud_timer: f32 = 0;
     var peak_mode: render.PeakMode = .path;
+    var viz_motion: render.VizMotion = .raw;
+    var viz_color: render.VizColor = .freq;
     var glow = true;
     var aurora = true;
     var fx_color: render.FxColorMode = .cover;
@@ -306,10 +308,20 @@ pub fn main() !void {
                         .peak => .path,
                     };
                     hud_msg = switch (peak_mode) {
-                        .path => " path (1:1) ",
-                        .ellipsis => " ellipsis ",
-                        .peak => " peak ",
+                        .path => " viz: path ",
+                        .ellipsis => " viz: ellipsis ",
+                        .peak => " viz: peak ",
                     };
+                    hud_timer = 2.0;
+                },
+                't' => {
+                    viz_motion = if (viz_motion == .raw) .smooth else .raw;
+                    hud_msg = if (viz_motion == .raw) " motion: 1:1 " else " motion: smooth ";
+                    hud_timer = 2.0;
+                },
+                'k' => {
+                    viz_color = if (viz_color == .freq) .cover else .freq;
+                    hud_msg = if (viz_color == .freq) " viz col: freq " else " viz col: cover ";
                     hud_timer = 2.0;
                 },
                 'g' => {
@@ -519,6 +531,8 @@ pub fn main() !void {
             .bpm = track_bpm,
             .show_rpm = rpm_hud_timer > 0,
             .peak_mode = peak_mode,
+            .viz_motion = viz_motion,
+            .viz_color = viz_color,
             .glow = glow,
             .aurora = aurora,
             .fx_color = fx_color,
