@@ -13,13 +13,14 @@ const MAX_STARS = 240;
 const MAX_FILAMENTS = 24;
 
 const Filament = struct {
-    x0: f32 = 0.5, // horizontal center in [0.18, 0.82]
-    y_head: f32 = 1.1, // rises from ~1.05 upward past -0.4
-    len: f32 = 0.35, // tail length in screen-height units
-    width: f32 = 0.04, // half-width in screen-width units
-    sway: f32 = 0.04, // horizontal wave amplitude
-    freq: f32 = 7.0, // vertical wave spatial frequency
-    speed: f32 = 0.34, // upward speed (screen heights / sec)
+    x0: f32 = 0.5, // horizontal center in [0.14, 0.86]
+    y_head: f32 = 1.0, // leading tip stretching upward from y_base
+    y_base: f32 = 1.0, // anchored bottom origin
+    max_life: f32 = 1.8, // total lifetime before fadeout completes
+    width: f32 = 0.8, // thin thickness in Braille sub-dot units
+    sway: f32 = 0.03, // horizontal wave amplitude
+    freq: f32 = 9.0, // vertical wave spatial frequency
+    speed: f32 = 0.65, // upward elongation speed (screen heights / sec)
     phase: f32 = 0,
     age: f32 = 0,
     strength: f32 = 0,
@@ -1213,13 +1214,13 @@ pub const Renderer = struct {
             self.mid_sustain *= @exp(-dt * 2.8);
         }
 
-        // Advance active rising filaments
+        // Advance active propagating filaments: elongate upward from bottom while rippling, then fade out
         for (&self.filaments) |*f| {
             if (!f.active) continue;
             f.age += dt;
-            f.y_head -= f.speed * dt;
-            f.phase += dt * 4.2;
-            if (f.y_head + f.len < -0.05) {
+            f.y_head = @max(0.0, f.y_head - f.speed * dt);
+            f.phase += dt * 7.8; // traveling wave ripples visibly upward
+            if (f.age >= f.max_life) {
                 f.active = false;
             }
         }
@@ -1244,16 +1245,17 @@ pub const Renderer = struct {
             const f = slot orelse break;
             const total = sus_l + sus_r + 1e-4;
             const bal = (sus_r - sus_l) / total; // -1 left .. +1 right
-            // Random anchor in central zone [0.16 .. 0.84], nudged by stereo mid balance
+            // Random anchor in central zone [0.14 .. 0.86], nudged by stereo mid balance
             const base_x = 0.20 + self.nextRand() * 0.60 + bal * 0.08;
             f.* = .{
                 .x0 = std.math.clamp(base_x, 0.14, 0.86),
-                .y_head = 1.02,
-                .len = 0.24 + self.nextRand() * 0.26,
-                .width = 0.65 + self.nextRand() * 0.45, // thin thickness in Braille sub-dot units (~1 dot wide)
-                .sway = 0.018 + self.nextRand() * 0.028,
-                .freq = 7.5 + self.nextRand() * 6.5,
-                .speed = 0.30 + self.nextRand() * 0.24,
+                .y_head = 1.0,
+                .y_base = 1.0,
+                .max_life = 1.35 + self.nextRand() * 1.05,
+                .width = 0.65 + self.nextRand() * 0.45, // thin thickness (~1 Braille dot)
+                .sway = 0.018 + self.nextRand() * 0.030,
+                .freq = 8.5 + self.nextRand() * 7.0,
+                .speed = 0.55 + self.nextRand() * 0.45,
                 .phase = self.nextRand() * TAU,
                 .age = 0,
                 .strength = std.math.clamp(0.45 + self.mid_sustain * 0.85, 0.4, 1.0),
@@ -1262,7 +1264,7 @@ pub const Renderer = struct {
         }
     }
 
-    /// Renders thin, crisp, low-opacity translucent Braille wave filaments rising from bottom to top.
+    /// Renders thin, crisp, low-opacity translucent Braille wave filaments elongating upward from bottom then fading out.
     fn drawFilaments(self: *const Renderer, s: *Screen, cx: f32, cy: f32, excl_r: f32, k: f32, vis_rows: usize, c1: [3]f32, c2: [3]f32, fx_color: FxColorMode, level: u8) void {
         if (s.cols < 8 or vis_rows < 4 or level == 0) return;
         var any = false;
@@ -1285,16 +1287,14 @@ pub const Renderer = struct {
         const inv_cols = 1.0 / cols_f;
         const inv_rows = 1.0 / rows_f;
         const excl_r2 = (excl_r + 1.0) * (excl_r + 1.0);
-        // Subtle low-opacity translucency (scales gently with level 1..10)
         const base_alpha = std.math.clamp(0.18 + @as(f32, @floatFromInt(level)) * 0.028, 0.16, 0.44);
 
         for (0..vis_rows) |r| {
             const cell_y0 = @as(f32, @floatFromInt(r));
             const ny_mid = (cell_y0 + 0.5) * inv_rows;
-            // Quick skip if no active filament covers this row
             var row_active = false;
             for (self.filaments) |f| {
-                if (f.active and ny_mid >= f.y_head - 0.03 and ny_mid <= f.y_head + f.len + 0.03) {
+                if (f.active and ny_mid >= f.y_head - 0.03 and ny_mid <= f.y_base + 0.03) {
                     row_active = true;
                     break;
                 }
@@ -1302,7 +1302,6 @@ pub const Renderer = struct {
             if (!row_active) continue;
 
             for (0..s.cols) |c| {
-                // Skip disc interior and already occupied cells
                 const ddx = @as(f32, @floatFromInt(c)) + 0.5 - cx;
                 const ddy = (cell_y0 + 0.5) * k - cy;
                 if (ddx * ddx + ddy * ddy < excl_r2) continue;
@@ -1315,28 +1314,34 @@ pub const Renderer = struct {
 
                 for (self.filaments) |f| {
                     if (!f.active) continue;
-                    const y_tail = f.y_head + f.len;
-                    if (ny_mid < f.y_head - 0.03 or ny_mid > y_tail + 0.03) continue;
-                    // Quick horizontal bounding check
+                    if (ny_mid < f.y_head - 0.03 or ny_mid > f.y_base + 0.03) continue;
                     const nx_cell = (cell_x0 + 0.5) * inv_cols;
                     if (@abs(nx_cell - f.x0) > f.sway + 2.5 * inv_cols) continue;
 
-                    const fade_in = smoothstep(0.0, 0.35, f.age);
-                    const half_w_cols = f.width * 0.42; // thin, crisp (~0.3–0.5 cell = ~1 Braille dot)
+                    const cur_len = @max(0.02, f.y_base - f.y_head);
+                    const fade_in = smoothstep(0.0, 0.22, f.age);
+                    const fade_out = smoothstep(f.max_life, f.max_life * 0.42, f.age);
+                    const life_a = fade_in * fade_out;
+                    if (life_a <= 0.01) continue;
+                    const half_w_cols = f.width * 0.42;
 
                     for (0..4) |j| {
                         const sy = cell_y0 + 0.125 + 0.25 * @as(f32, @floatFromInt(j));
                         const ny = sy * inv_rows;
-                        if (ny < f.y_head or ny > y_tail) continue;
-                        const along = (ny - f.y_head) / f.len;
-                        const wave_x_cols = (f.x0 + f.sway * @sin(ny * f.freq + f.phase) * (0.4 + 0.6 * along)) * cols_f;
+                        if (ny < f.y_head or ny > f.y_base) continue;
+                        // 0 at growing tip (top), 1 at anchored base (bottom)
+                        const along = (ny - f.y_head) / cur_len;
+                        // Wave amplitude grows gracefully as it rises away from the base
+                        const sway_env = 0.25 + 0.75 * (1.0 - along);
+                        const wave_x_cols = (f.x0 + f.sway * sway_env * @sin(ny * f.freq + f.phase)) * cols_f;
                         for (0..2) |i| {
                             const sx = cell_x0 + 0.25 + 0.5 * @as(f32, @floatFromInt(i));
                             if (@abs(sx - wave_x_cols) <= half_w_cols) {
                                 bits |= dot_bits[j][i];
-                                const env_along = smoothstep(0.0, 0.14, along) * smoothstep(1.0, 0.18, along);
-                                const top_fade = smoothstep(0.0, 0.15, ny);
-                                const a = f.strength * env_along * fade_in * top_fade;
+                                // Soft taper at the leading tip and bottom origin
+                                const tip_fade = smoothstep(0.0, 0.12, along);
+                                const base_fade = smoothstep(1.0, 0.85, along);
+                                const a = f.strength * life_a * tip_fade * base_fade;
                                 if (a > max_a) max_a = a;
                             }
                         }
