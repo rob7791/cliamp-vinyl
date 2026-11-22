@@ -906,14 +906,16 @@ pub const Renderer = struct {
                             }.f;
                             const r_base = r0 + ring_min;
                             if (p.peak_mode == .ellipsis2) {
-                                // ellipsis2: mids are fully filled and sit ON TOP of both low & high outlines
+                                // ellipsis2: all 3 ellipses solidly filled, priority: mid (5) > high (4) > low (3)
                                 const mid_r = r_base + self.ell2_mid[idx] * ring_h;
+                                const high_r = r_base + self.ell2_high[idx] * ring_h;
+                                const low_r = r_base + self.ell2_low[idx] * ring_h;
                                 if (self.ell2_mid[idx] > 0.01 and rho <= mid_r + path_w) {
-                                    hit_layer = 4; // mid fill/outline overrides low & high
-                                } else if (onCurve(&self.ell2_low, idx, prev_idx, next_idx, r_base, ring_h, path_w, rho)) {
+                                    hit_layer = 5;
+                                } else if (self.ell2_high[idx] > 0.01 and rho <= high_r + path_w) {
+                                    hit_layer = 4;
+                                } else if (self.ell2_low[idx] > 0.01 and rho <= low_r + path_w) {
                                     hit_layer = 3;
-                                } else if (onCurve(&self.ell2_high, idx, prev_idx, next_idx, r_base, ring_h, path_w, rho)) {
-                                    hit_layer = 1;
                                 }
                             } else {
                                 // ellipsis: outlines only, priority low > mid > high
@@ -1007,9 +1009,9 @@ pub const Renderer = struct {
                 cell.fg = if (path_lit > 0)
                     toRgb(.{ path_acc[0] / path_lit, path_acc[1] / path_lit, path_acc[2] / path_lit })
                 else switch (cell_layer) {
-                    4, 2 => band_mid_col,
+                    5, 2 => band_mid_col,
+                    4, 1 => band_high_col,
                     3 => band_low_col,
-                    1 => band_high_col,
                     else => toRgb(.{ acc[0] / lit, acc[1] / lit, acc[2] / lit }),
                 };
             }
