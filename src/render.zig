@@ -21,6 +21,7 @@ const Filament = struct {
     sway: f32 = 0.03, // horizontal wave amplitude
     freq: f32 = 9.0, // vertical wave spatial frequency
     speed: f32 = 0.65, // upward elongation speed (screen heights / sec)
+    wave_speed: f32 = 7.5, // phase oscillation speed driven by mid pitch
     phase: f32 = 0,
     age: f32 = 0,
     strength: f32 = 0,
@@ -367,6 +368,8 @@ pub const Renderer = struct {
         // Musical mid-range (~300 Hz – 2.2 kHz, u in [0.40, 0.72]): piano, trumpet, saxophone
         var sus_l_sum: f32 = 0;
         var sus_r_sum: f32 = 0;
+        var sus_u_num: f32 = 0;
+        var sus_u_den: f32 = 0;
         var sus_cnt: f32 = 0;
         for (0..n) |i| {
             const u = if (n > 1) @as(f32, @floatFromInt(i)) / nf else 0.0;
@@ -387,6 +390,8 @@ pub const Renderer = struct {
             if (u >= 0.40 and u <= 0.72) {
                 sus_l_sum += raw_l[i];
                 sus_r_sum += raw_r[i];
+                sus_u_num += u * mono;
+                sus_u_den += mono;
                 sus_cnt += 1.0;
             }
             if (u >= 0.60 and u <= 0.85) {
@@ -486,7 +491,11 @@ pub const Renderer = struct {
         const sus_l: f32 = if (sus_cnt > 0) std.math.clamp(sus_l_sum / sus_cnt, 0, 1) else 0;
         const sus_r: f32 = if (sus_cnt > 0) std.math.clamp(sus_r_sum / sus_cnt, 0, 1) else 0;
         const sus_e: f32 = 0.5 * (sus_l + sus_r);
-        self.updateFilaments(p.dt, sus_l, sus_r, sus_e, p.wave_level);
+        const sus_pitch: f32 = if (sus_u_den > 1e-4)
+            std.math.clamp(((sus_u_num / sus_u_den) - 0.40) / 0.32, 0.0, 1.0)
+        else
+            0.5;
+        self.updateFilaments(p.dt, sus_l, sus_r, sus_e, sus_pitch, p.wave_level);
 
         for (0..ANG) |a| {
             const th = (@as(f32, @floatFromInt(a)) + 0.5) / ANG * TAU;
@@ -1202,7 +1211,7 @@ pub const Renderer = struct {
         }
     }
 
-    fn updateFilaments(self: *Renderer, dt: f32, sus_l: f32, sus_r: f32, sus_e: f32, level: u8) void {
+    fn updateFilaments(self: *Renderer, dt: f32, sus_l: f32, sus_r: f32, sus_e: f32, pitch: f32, level: u8) void {
         // Sensitive sustain detector: very low sustain threshold (~40-140ms) for piano, trumpet, sax phrases
         if (sus_e > 0.06) {
             self.mid_hold = @min(2.0, self.mid_hold + dt);
@@ -1214,12 +1223,12 @@ pub const Renderer = struct {
             self.mid_sustain *= @exp(-dt * 2.8);
         }
 
-        // Advance active propagating filaments: elongate upward from bottom while rippling, then fade out
+        // Advance active propagating filaments: wave oscillation speed follows the note's frequency
         for (&self.filaments) |*f| {
             if (!f.active) continue;
             f.age += dt;
             f.y_head = @max(0.0, f.y_head - f.speed * dt);
-            f.phase += dt * 7.8; // traveling wave ripples visibly upward
+            f.phase += dt * f.wave_speed;
             if (f.age >= f.max_life) {
                 f.active = false;
             }
@@ -1254,8 +1263,9 @@ pub const Renderer = struct {
                 .max_life = 1.35 + self.nextRand() * 1.05,
                 .width = 0.65 + self.nextRand() * 0.45, // thin thickness (~1 Braille dot)
                 .sway = 0.018 + self.nextRand() * 0.030,
-                .freq = 8.5 + self.nextRand() * 7.0,
+                .freq = 6.5 + pitch * 8.5 + self.nextRand() * 2.5,
                 .speed = 0.55 + self.nextRand() * 0.45,
+                .wave_speed = 3.2 + pitch * 12.0 + self.nextRand() * 1.8, // slower on low sax/piano, faster on high trumpet
                 .phase = self.nextRand() * TAU,
                 .age = 0,
                 .strength = std.math.clamp(0.45 + self.mid_sustain * 0.85, 0.4, 1.0),
@@ -1289,7 +1299,7 @@ pub const Renderer = struct {
         const excl_r2 = (excl_r + 1.0) * (excl_r + 1.0);
         // Very subtle low-opacity filament core + even fainter soft halo around it
         const base_alpha = std.math.clamp(0.11 + @as(f32, @floatFromInt(level)) * 0.017, 0.10, 0.28);
-        const halo_gain = base_alpha * 0.34;
+        const halo_gain = base_alpha * 0.15;
 
         for (0..vis_rows) |r| {
             const cell_y0 = @as(f32, @floatFromInt(r));
@@ -1366,7 +1376,7 @@ pub const Renderer = struct {
                     }
                 }
                 if (halo_a > 0.02) {
-                    const h_amt = std.math.clamp(halo_a * halo_gain, 0.0, 0.14);
+                    const h_amt = std.math.clamp(halo_a * halo_gain, 0.0, 0.06);
                     const bg = toRgb(mix3(toF(cell.bg), fil_col, h_amt));
                     cell.bg = bg;
                     cell.fg = bg;
