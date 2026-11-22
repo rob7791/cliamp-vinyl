@@ -9,6 +9,17 @@ const Screen = scr.Screen;
 
 const ANG = 1440;
 const TAU: f32 = std.math.tau;
+const MAX_STARS = 72;
+
+const Star = struct {
+    x: f32 = 0, // normalized 0..1 across screen
+    y: f32 = 0, // normalized 0..1 across screen
+    life: f32 = 0,
+    max_life: f32 = 1,
+    peak: f32 = 0,
+    kind: u8 = 0,
+    phase: f32 = 0,
+};
 
 pub const Texture = struct {
     size: usize = 0,
@@ -163,6 +174,7 @@ pub const Params = struct {
     viz_color: VizColor = .freq,
     glow: bool = true,
     aurora: bool = true,
+    stars: bool = true,
     glow_gain: f32 = 1.0,
     aurora_gain: f32 = 1.0,
     fx_color: FxColorMode = .cover,
@@ -204,6 +216,10 @@ pub const Renderer = struct {
     sub_r: f32 = 0,
     sub_dom_u: f32 = 0.10,
     aurora_phase: f32 = 0,
+    air_avg: f32 = 0,
+    star_rng: u32 = 0x9E3779B9,
+    star_accum: f32 = 0,
+    stars: [MAX_STARS]Star = [_]Star{.{}} ** MAX_STARS,
     tex_size_for: usize = 0,
     img_gen: u64 = 0,
 
@@ -319,6 +335,10 @@ pub const Renderer = struct {
         var kick_u_num: f32 = 0;
         var kick_u_den: f32 = 0;
         var kick_cnt: f32 = 0;
+        // Very high frequencies (~5–16 kHz, u >= 0.82) for twinkling stars/sparkles
+        var air_l_sum: f32 = 0;
+        var air_r_sum: f32 = 0;
+        var air_cnt: f32 = 0;
         for (0..n) |i| {
             const u = if (n > 1) @as(f32, @floatFromInt(i)) / nf else 0.0;
             const mono = 0.5 * (raw_l[i] + raw_r[i]);
@@ -334,6 +354,11 @@ pub const Renderer = struct {
                 kick_u_num += u * mono;
                 kick_u_den += mono;
                 kick_cnt += 1.0;
+            }
+            if (u >= 0.82) {
+                air_l_sum += raw_l[i];
+                air_r_sum += raw_r[i];
+                air_cnt += 1.0;
             }
             const dl = (u - 0.12) / 0.20;
             const dm = (u - 0.50) / 0.22;
@@ -407,6 +432,14 @@ pub const Renderer = struct {
         self.sub_r = std.math.clamp(self.sub_r, 0, 1.0);
         const sub_avg = 0.5 * (self.sub_l + self.sub_r);
         self.aurora_phase = @mod(self.aurora_phase + p.dt * (0.9 + 2.8 * sub_avg), TAU * 16.0);
+
+        // High-frequency sparkle/star emitter (~5–16 kHz)
+        const air_l: f32 = if (air_cnt > 0) std.math.clamp(air_l_sum / air_cnt, 0, 1) else 0;
+        const air_r: f32 = if (air_cnt > 0) std.math.clamp(air_r_sum / air_cnt, 0, 1) else 0;
+        const air_e: f32 = 0.5 * (air_l + air_r);
+        const air_flux: f32 = @max(0.0, air_e - self.air_avg);
+        self.air_avg += (air_e - self.air_avg) * @min(1.0, p.dt * 7.0);
+        self.updateStars(p.dt, air_l, air_r, air_e, air_flux, p.stars);
 
         for (0..ANG) |a| {
             const th = (@as(f32, @floatFromInt(a)) + 0.5) / ANG * TAU;
@@ -523,6 +556,9 @@ pub const Renderer = struct {
             }
             if (p.aurora and (self.sub_l > 0.004 or self.sub_r > 0.004)) {
                 self.drawAurora(s, s.rows, p.fx_color, p.aurora_gain);
+            }
+            if (p.stars) {
+                self.drawStars(s, cx, cy, r0 + ring_min, k, pal.c2, p.viz_color);
             }
             self.drawRing(s, &p, cx, cy, rd, r0, ring_h, ring_min, vis_rows, pal.c1, pal.c2, bgf);
 
@@ -991,6 +1027,98 @@ pub const Renderer = struct {
         }
     }
 
+    fn nextRand(self: *Renderer) f32 {
+        var x = self.star_rng;
+        x ^= x << 13;
+        x ^= x >> 17;
+        x ^= x << 5;
+        self.star_rng = if (x == 0) 0x9E3779B9 else x;
+        return @as(f32, @floatFromInt(self.star_rng & 0xFFFFFF)) / 16777216.0;
+    }
+
+    fn updateStars(self: *Renderer, dt: f32, air_l: f32, air_r: f32, air_e: f32, air_flux: f32, enabled: bool) void {
+        for (&self.stars) |*st| {
+            if (st.life > 0) {
+                st.life = @max(0.0, st.life - dt);
+                st.phase += dt * 14.0;
+            }
+        }
+        if (!enabled) return;
+        const drive = std.math.clamp(air_e * 1.1 + air_flux * 3.8, 0.0, 2.5);
+        if (drive < 0.09) return;
+        // Spawn rate proportional to high-frequency energy & cymbal/hi-hat transients
+        self.star_accum += dt * drive * 38.0;
+        var spawns: usize = 0;
+        while (self.star_accum >= 1.0 and spawns < 4) : (spawns += 1) {
+            self.star_accum -= 1.0;
+            // Find an inactive slot
+            var slot: ?*Star = null;
+            for (&self.stars) |*st| {
+                if (st.life <= 0) {
+                    slot = st;
+                    break;
+                }
+            }
+            const st = slot orelse break;
+            const rx = self.nextRand();
+            const ry = self.nextRand();
+            // Bias horizontal side toward louder stereo high-frequency channel
+            const total = air_l + air_r + 1e-4;
+            const left_prob = air_l / total;
+            const side_roll = self.nextRand();
+            st.x = if (side_roll < left_prob) rx * 0.48 else 0.52 + rx * 0.48;
+            st.y = 0.03 + ry * 0.94;
+            st.max_life = 0.35 + self.nextRand() * 0.75;
+            st.life = st.max_life;
+            st.peak = std.math.clamp(0.42 + drive * 0.45 + self.nextRand() * 0.25, 0.35, 1.0);
+            st.phase = self.nextRand() * TAU;
+            const r_kind = self.nextRand();
+            st.kind = if (st.peak > 0.82 and r_kind > 0.65)
+                3 // ✦ bright four-point sparkle
+            else if (st.peak > 0.65 and r_kind > 0.45)
+                2 // ✧ hollow sparkle
+            else if (r_kind > 0.35)
+                1 // ⋆ small star
+            else
+                0; // · fine dot
+        }
+    }
+
+    fn drawStars(self: *const Renderer, s: *Screen, cx: f32, cy: f32, excl_r: f32, k: f32, c2: [3]f32, viz_color: VizColor) void {
+        if (s.cols < 4 or s.rows < 4) return;
+        const star_col: [3]f32 = if (viz_color == .freq)
+            .{ 255, 255, 150 } // luminous starlight yellow (coherent with high-freq yellow)
+        else
+            mix3(c2, .{ 255, 255, 255 }, 0.68);
+        const excl_r2 = (excl_r + 1.2) * (excl_r + 1.2);
+        const glyphs = [4]u21{ 0x00B7, 0x22C6, 0x2727, 0x2726 }; // · ⋆ ✧ ✦
+
+        for (self.stars) |st| {
+            if (st.life <= 0) continue;
+            const col_i: usize = @min(s.cols - 1, @as(usize, @intFromFloat(st.x * @as(f32, @floatFromInt(s.cols)))));
+            const row_i: usize = @min(s.rows - 1, @as(usize, @intFromFloat(st.y * @as(f32, @floatFromInt(s.rows)))));
+
+            // Never draw inside the disc/inner ring area
+            const dx = @as(f32, @floatFromInt(col_i)) + 0.5 - cx;
+            const dy = (@as(f32, @floatFromInt(row_i)) + 0.5) * k - cy;
+            if (dx * dx + dy * dy < excl_r2) continue;
+
+            const cell = s.at(col_i, row_i);
+            if (cell.cp != ' ') continue;
+
+            const age = st.max_life - st.life;
+            const attack = smoothstep(0.0, 0.08, age);
+            const decay = st.life / st.max_life;
+            const twinkle = 0.72 + 0.28 * @sin(st.phase);
+            const alpha = std.math.clamp(st.peak * attack * decay * decay * twinkle, 0.0, 1.0);
+            if (alpha <= 0.05) continue;
+
+            cell.cp = glyphs[st.kind];
+            cell.fg = toRgb(mix3(toF(cell.bg), star_col, alpha));
+            cell.bold = alpha > 0.75 and st.kind >= 2;
+        }
+    }
+
     fn drawRing(self: *Renderer, s: *Screen, p: *const Params, cx: f32, cy: f32, rd: f32, r0: f32, ring_h: f32, ring_min: f32, vis_rows: usize, c1: [3]f32, c2: [3]f32, bgf: [3]f32) void {
         _ = bgf;
         const k = p.aspect;
@@ -1263,6 +1391,7 @@ pub const Renderer = struct {
                 " t / k   viz 1:1/smooth / colori",
                 " g / a   bagliore / aurora on/off",
                 " 1/2 3/4 intensità glow / aurora",
+                " * / e   stelline alte freq on/off",
                 " c       colori fx cover/freq",
                 " d / x   risoluzione / AA disco",
                 " o       stile cover/vinyl/v.art/CD",

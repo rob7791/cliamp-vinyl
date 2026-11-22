@@ -206,6 +206,7 @@ pub fn main() !void {
     var viz_color: render.VizColor = .freq;
     var glow = true;
     var aurora = true;
+    var stars = true;
     var glow_gain: f32 = 1.0;
     var aurora_gain: f32 = 1.0;
     var fx_color: render.FxColorMode = .cover;
@@ -338,6 +339,11 @@ pub fn main() !void {
                 'a' => {
                     aurora = !aurora;
                     hud_msg = if (aurora) " aurora on " else " aurora off ";
+                    hud_timer = 2.0;
+                },
+                '*', 'e' => {
+                    stars = !stars;
+                    hud_msg = if (stars) " stars on " else " stars off ";
                     hud_timer = 2.0;
                 },
                 '1' => {
@@ -571,6 +577,7 @@ pub fn main() !void {
             .viz_color = viz_color,
             .glow = glow,
             .aurora = aurora,
+            .stars = stars,
             .glow_gain = glow_gain,
             .aurora_gain = aurora_gain,
             .fx_color = fx_color,
