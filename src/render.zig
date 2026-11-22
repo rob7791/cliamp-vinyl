@@ -219,6 +219,7 @@ pub const Renderer = struct {
     air_avg: f32 = 0,
     star_rng: u32 = 0x9E3779B9,
     star_accum: f32 = 0,
+    star_cd: f32 = 0,
     stars: [MAX_STARS]Star = [_]Star{.{}} ** MAX_STARS,
     tex_size_for: usize = 0,
     img_gen: u64 = 0,
@@ -1037,6 +1038,7 @@ pub const Renderer = struct {
     }
 
     fn updateStars(self: *Renderer, dt: f32, air_l: f32, air_r: f32, air_e: f32, air_flux: f32, level: u8) void {
+        if (self.star_cd > 0) self.star_cd = @max(0.0, self.star_cd - dt);
         for (&self.stars) |*st| {
             if (st.life > 0) {
                 st.life = @max(0.0, st.life - dt);
@@ -1047,16 +1049,31 @@ pub const Renderer = struct {
             self.star_accum = 0;
             return;
         }
-        const drive = std.math.clamp(air_e * 0.9 + air_flux * 4.5, 0.0, 2.5);
-        if (drive < 0.12) return;
         const lv_f: f32 = @floatFromInt(level);
-        // Spawn rate and burst count scale with star_level (1..10)
-        self.star_accum += dt * drive * (lv_f * 14.0);
-        const max_spawns: usize = @as(usize, level) * 2;
-        var spawns: usize = 0;
-        while (self.star_accum >= 1.0 and spawns < max_spawns) : (spawns += 1) {
-            self.star_accum -= 1.0;
-            // Find an inactive slot
+        var to_spawn: usize = 0;
+
+        // 1) Immediate onset burst on every crisp hi-hat / cymbal transient (never skip short 1-2 frame hits!)
+        if (air_flux > 0.032 and air_e > 0.06 and self.star_cd <= 0) {
+            const burst_f = @max(1.0, @round(lv_f * std.math.clamp(0.45 + air_flux * 3.5, 0.45, 1.8)));
+            to_spawn += @as(usize, @intFromFloat(burst_f));
+            self.star_cd = 0.035; // 35ms debounce catches even rapid 16th-note hi-hats
+        }
+
+        // 2) Continuous shimmer during sustained cymbal wash/sizzle
+        if (air_e > 0.09) {
+            self.star_accum += dt * air_e * (lv_f * 18.0);
+            while (self.star_accum >= 1.0) {
+                self.star_accum -= 1.0;
+                to_spawn += 1;
+            }
+        }
+
+        const max_spawns: usize = @as(usize, level) * 2 + 2;
+        to_spawn = @min(to_spawn, max_spawns);
+        const drive = std.math.clamp(air_e * 1.1 + air_flux * 4.5, 0.2, 2.5);
+
+        var spawned: usize = 0;
+        while (spawned < to_spawn) : (spawned += 1) {
             var slot: ?*Star = null;
             for (&self.stars) |*st| {
                 if (st.life <= 0) {
@@ -1065,24 +1082,36 @@ pub const Renderer = struct {
                 }
             }
             const st = slot orelse break;
-            const rx = self.nextRand();
-            const ry = self.nextRand();
-            // Bias horizontal side toward louder stereo high-frequency channel
             const total = air_l + air_r + 1e-4;
             const left_prob = air_l / total;
-            const side_roll = self.nextRand();
-            st.x = if (side_roll < left_prob) rx * 0.48 else 0.52 + rx * 0.48;
-            st.y = 0.03 + ry * 0.94;
-            st.max_life = 0.35 + self.nextRand() * 0.75;
+
+            // Pick a point outside the central ~36% disc zone so stars aren't silently dropped
+            var sx: f32 = 0.1;
+            var sy: f32 = 0.1;
+            for (0..8) |_| {
+                const rx = self.nextRand();
+                const ry = self.nextRand();
+                const side_roll = self.nextRand();
+                const cx_try = if (side_roll < left_prob) rx * 0.48 else 0.52 + rx * 0.48;
+                const cy_try = 0.03 + ry * 0.94;
+                const ddx = (cx_try - 0.5) * 1.6;
+                const ddy = (cy_try - 0.5) * 1.0;
+                sx = cx_try;
+                sy = cy_try;
+                if (ddx * ddx + ddy * ddy > 0.16) break;
+            }
+            st.x = sx;
+            st.y = sy;
+            st.max_life = 0.30 + self.nextRand() * 0.65;
             st.life = st.max_life;
-            st.peak = std.math.clamp(0.42 + drive * 0.45 + self.nextRand() * 0.25, 0.35, 1.0);
+            st.peak = std.math.clamp(0.48 + drive * 0.42 + self.nextRand() * 0.22, 0.40, 1.0);
             st.phase = self.nextRand() * TAU;
             const r_kind = self.nextRand();
-            st.kind = if (st.peak > 0.82 and r_kind > 0.65)
+            st.kind = if (st.peak > 0.80 and r_kind > 0.62)
                 3 // ✦ bright four-point sparkle
-            else if (st.peak > 0.65 and r_kind > 0.45)
+            else if (st.peak > 0.62 and r_kind > 0.42)
                 2 // ✧ hollow sparkle
-            else if (r_kind > 0.35)
+            else if (r_kind > 0.32)
                 1 // ⋆ small star
             else
                 0; // · fine dot
