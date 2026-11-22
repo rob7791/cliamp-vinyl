@@ -206,6 +206,8 @@ pub fn main() !void {
     var viz_color: render.VizColor = .freq;
     var glow = true;
     var aurora = true;
+    var glow_gain: f32 = 1.0;
+    var aurora_gain: f32 = 1.0;
     var fx_color: render.FxColorMode = .cover;
     var disc_res: render.DiscRes = .high;
     var aa = true;
@@ -215,6 +217,7 @@ pub fn main() !void {
     var info_timer: f32 = 0;
     var prev_play_state: cliamp.PlayState = .unknown;
     var last_track_key: u64 = 0;
+    var hud_buf: [64]u8 = undefined;
     var hud_msg: []const u8 = "";
     var hud_timer: f32 = 0;
     const rpm_presets = [_]f32{ 5.0, 16.666, 28.0, 33.333, 45.0, 78.0, 0.0 };
@@ -334,6 +337,26 @@ pub fn main() !void {
                 'a' => {
                     aurora = !aurora;
                     hud_msg = if (aurora) " aurora on " else " aurora off ";
+                    hud_timer = 2.0;
+                },
+                '1' => {
+                    glow_gain = @max(0.2, glow_gain - 0.2);
+                    hud_msg = std.fmt.bufPrint(&hud_buf, " glow: {d:.0}% ", .{glow_gain * 100.0}) catch " glow ";
+                    hud_timer = 2.0;
+                },
+                '2' => {
+                    glow_gain = @min(3.0, glow_gain + 0.2);
+                    hud_msg = std.fmt.bufPrint(&hud_buf, " glow: {d:.0}% ", .{glow_gain * 100.0}) catch " glow ";
+                    hud_timer = 2.0;
+                },
+                '3' => {
+                    aurora_gain = @max(0.2, aurora_gain - 0.2);
+                    hud_msg = std.fmt.bufPrint(&hud_buf, " aurora: {d:.0}% ", .{aurora_gain * 100.0}) catch " aurora ";
+                    hud_timer = 2.0;
+                },
+                '4' => {
+                    aurora_gain = @min(3.0, aurora_gain + 0.2);
+                    hud_msg = std.fmt.bufPrint(&hud_buf, " aurora: {d:.0}% ", .{aurora_gain * 100.0}) catch " aurora ";
                     hud_timer = 2.0;
                 },
                 'c' => {
@@ -537,6 +560,8 @@ pub fn main() !void {
             .viz_color = viz_color,
             .glow = glow,
             .aurora = aurora,
+            .glow_gain = glow_gain,
+            .aurora_gain = aurora_gain,
             .fx_color = fx_color,
             .hud_msg = if (hud_timer > 0) hud_msg else "",
             .bg_mode = bg_mode,

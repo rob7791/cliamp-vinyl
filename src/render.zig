@@ -148,6 +148,8 @@ pub const Params = struct {
     viz_color: VizColor = .freq,
     glow: bool = true,
     aurora: bool = true,
+    glow_gain: f32 = 1.0,
+    aurora_gain: f32 = 1.0,
     fx_color: FxColorMode = .cover,
     hud_msg: []const u8 = "",
     bg_mode: BgMode,
@@ -495,10 +497,10 @@ pub const Renderer = struct {
             self.updateRing(&p);
             if (p.glow and self.kick_glow > 0.004) {
                 const glow_src = if (p.fx_color == .spectrum) pathBandColor(self.kick_dom_u) else pal.c1;
-                self.drawGlow(s, cx, cy, rd, rmax, s.rows, k, glow_src, pal.c2, bgf);
+                self.drawGlow(s, cx, cy, rd, rmax, s.rows, k, glow_src, pal.c2, bgf, p.glow_gain);
             }
             if (p.aurora and (self.sub_l > 0.004 or self.sub_r > 0.004)) {
-                self.drawAurora(s, s.rows, p.fx_color);
+                self.drawAurora(s, s.rows, p.fx_color, p.aurora_gain);
             }
             self.drawRing(s, &p, cx, cy, rd, r0, ring_h, ring_min, vis_rows, pal.c1, pal.c2, bgf);
 
@@ -727,6 +729,7 @@ pub const Renderer = struct {
         c1: [3]f32,
         c2: [3]f32,
         bgf: [3]f32,
+        gain: f32,
     ) void {
         _ = c2;
         // Pure 100%-saturated hue extracted from the cover's dominant color (no white washout)
@@ -737,16 +740,17 @@ pub const Renderer = struct {
             break :blk .{ (c1[0] - c_mn) * inv, (c1[1] - c_mn) * inv, (c1[2] - c_mn) * inv };
         } else .{ 0.45, 0.55, 1.0 }; // fallback hue for greyscale covers
 
+        const g = std.math.clamp(gain, 0.1, 3.0);
         const bg_mx = @max(bgf[0], @max(bgf[1], bgf[2]));
-        const target_v = std.math.clamp(bg_mx * 3.2, 64.0, 120.0);
+        const target_v = std.math.clamp(bg_mx * 3.2 * @max(1.0, g), 64.0, 215.0);
         const sat_col = [3]f32{ pure[0] * target_v, pure[1] * target_v, pure[2] * target_v };
 
-        const spread = @max(rmax * 0.85, rd * 1.35);
+        const spread = @max(rmax * 0.85, rd * 1.35) * (0.85 + 0.15 * g);
         const inv_spread = 1.0 / spread;
         const max_d = rd + spread * 2.2;
         const max_d2 = max_d * max_d;
         const inner_start = rd * 0.86;
-        const intensity = self.kick_glow * 0.82;
+        const intensity = self.kick_glow * 0.82 * g;
 
         for (0..vis_rows) |r| {
             const dy = (@as(f32, @floatFromInt(r)) + 0.5) * k - cy;
@@ -763,7 +767,7 @@ pub const Renderer = struct {
                 const dist_out = @max(0.0, d - rd * 0.96);
                 const t = dist_out * inv_spread;
                 const falloff = @exp(-std.math.pow(f32, t, 1.55));
-                const amt = std.math.clamp(intensity * rim_in * falloff, 0, 0.92);
+                const amt = std.math.clamp(intensity * rim_in * falloff, 0, 0.98);
                 if (amt <= 0.002) continue;
 
                 const col = toRgb(mix3(bgf, sat_col, amt));
@@ -775,22 +779,26 @@ pub const Renderer = struct {
     }
 
     /// Darkening storm-like aurora creeping inward from left & right screen edges on 20–80 Hz sub-bass.
-    fn drawAurora(self: *const Renderer, s: *Screen, vis_rows: usize, fx_color: FxColorMode) void {
+    fn drawAurora(self: *const Renderer, s: *Screen, vis_rows: usize, fx_color: FxColorMode, gain: f32) void {
         if (s.cols < 4 or vis_rows < 2) return;
+        const g = std.math.clamp(gain, 0.1, 3.0);
+        const sl = std.math.clamp(self.sub_l * g, 0.0, 1.8);
+        const sr = std.math.clamp(self.sub_r * g, 0.0, 1.8);
         const cols_f: f32 = @floatFromInt(s.cols);
         const rows_f: f32 = @floatFromInt(vis_rows);
-        const max_span = @max(4.0, cols_f * 0.44);
+        const max_span = @max(4.0, cols_f * (0.44 * (0.85 + 0.15 * g)));
         const inv_span = 1.0 / max_span;
         const phase = self.aurora_phase;
         const spec_col = pathBandColor(self.sub_dom_u);
-        const storm_tint = [3]f32{ spec_col[0] * 0.30, spec_col[1] * 0.30, spec_col[2] * 0.30 };
+        const tint_scale = std.math.clamp(0.30 * (0.8 + 0.2 * g), 0.15, 0.55);
+        const storm_tint = [3]f32{ spec_col[0] * tint_scale, spec_col[1] * tint_scale, spec_col[2] * tint_scale };
 
         for (0..vis_rows) |r| {
             const ny = (@as(f32, @floatFromInt(r)) + 0.5) / rows_f;
             const sway_l = 0.5 + 0.30 * @sin(ny * 5.2 + phase * 1.1) + 0.20 * @sin(ny * 11.7 - phase * 1.9);
             const sway_r = 0.5 + 0.30 * @sin(ny * 5.6 - phase * 1.0 + 1.7) + 0.20 * @sin(ny * 11.1 + phase * 1.7);
-            const reach_l = (0.28 + 0.72 * self.sub_l) * (0.62 + 0.58 * sway_l);
-            const reach_r = (0.28 + 0.72 * self.sub_r) * (0.62 + 0.58 * sway_r);
+            const reach_l = (0.28 + 0.72 * @min(1.3, sl)) * (0.62 + 0.58 * sway_l);
+            const reach_r = (0.28 + 0.72 * @min(1.3, sr)) * (0.62 + 0.58 * sway_r);
             const vert_ripple_l = @sin(ny * 4.5 + phase) * 2.0;
             const vert_ripple_r = @sin(ny * 4.9 - phase * 1.1 + 1.3) * 2.0;
 
@@ -800,17 +808,17 @@ pub const Renderer = struct {
                 if (edge_l > reach_l and edge_r > reach_r) continue;
 
                 var dark: f32 = 0;
-                if (self.sub_l > 0.004 and edge_l < reach_l) {
+                if (sl > 0.004 and edge_l < reach_l) {
                     const mask = smoothstep(reach_l, 0.0, edge_l);
                     const ribbon = 0.65 + 0.35 * @sin(edge_l * 14.0 - phase * 2.4 + vert_ripple_l);
-                    dark = @max(dark, self.sub_l * mask * ribbon);
+                    dark = @max(dark, sl * mask * ribbon);
                 }
-                if (self.sub_r > 0.004 and edge_r < reach_r) {
+                if (sr > 0.004 and edge_r < reach_r) {
                     const mask = smoothstep(reach_r, 0.0, edge_r);
                     const ribbon = 0.65 + 0.35 * @sin(edge_r * 14.0 - phase * 2.2 + vert_ripple_r);
-                    dark = @max(dark, self.sub_r * mask * ribbon);
+                    dark = @max(dark, sr * mask * ribbon);
                 }
-                const amt = std.math.clamp(dark * 0.94, 0.0, 0.95);
+                const amt = std.math.clamp(dark * 0.94, 0.0, 0.98);
                 if (amt <= 0.005) continue;
 
                 const cell = s.at(c, r);
@@ -847,11 +855,11 @@ pub const Renderer = struct {
         const band_low_col: Rgb = if (p.viz_color == .freq)
             .{ .r = 102, .g = 51, .b = 153 }
         else
-            toRgb(mix3(c1, .{ 18, 12, 24 }, 0.42));
+            toRgb(mix3(c1, .{ 16, 12, 20 }, 0.48));
         const band_mid_col: Rgb = if (p.viz_color == .freq)
-            .{ .r = 0, .g = 128, .b = 128 }
+            (if (p.peak_mode == .ellipsis2) Rgb{ .r = 0, .g = 185, .b = 185 } else Rgb{ .r = 0, .g = 128, .b = 128 })
         else
-            toRgb(c1);
+            (if (p.peak_mode == .ellipsis2) brightSaturate(c1) else toRgb(c1));
         const band_high_col: Rgb = if (p.viz_color == .freq)
             .{ .r = 255, .g = 255, .b = 0 }
         else
@@ -1101,8 +1109,8 @@ pub const Renderer = struct {
                 " v / 0   preset RPM / reset",
                 " w       path/ellip/ellip2/peak",
                 " t / k   viz 1:1/smooth / colori",
-                " g       bagliore cassa on/off",
-                " a       aurora sub-bass on/off",
+                " g / a   bagliore / aurora on/off",
+                " 1/2 3/4 intensità glow / aurora",
                 " c       colori fx cover/freq",
                 " d / x   risoluzione / AA disco",
                 " m       info auto/mostra/nascondi",
@@ -1262,6 +1270,20 @@ inline fn toRgb(c: [3]f32) Rgb {
         .g = @intFromFloat(std.math.clamp(c[1], 0, 255)),
         .b = @intFromFloat(std.math.clamp(c[2], 0, 255)),
     };
+}
+
+/// Lightens a color while boosting saturation so it pops vividly without washing out.
+fn brightSaturate(c: [3]f32) Rgb {
+    const avg = (c[0] + c[1] + c[2]) / 3.0;
+    var s = [3]f32{
+        std.math.clamp(avg + (c[0] - avg) * 1.45, 0, 255),
+        std.math.clamp(avg + (c[1] - avg) * 1.45, 0, 255),
+        std.math.clamp(avg + (c[2] - avg) * 1.45, 0, 255),
+    };
+    const mx = @max(s[0], @max(s[1], s[2]));
+    const gain: f32 = if (mx > 1.0) @max(1.20, 248.0 / mx) else 1.0;
+    s = .{ s[0] * gain, s[1] * gain, s[2] * gain };
+    return toRgb(s);
 }
 
 test "rasterizeDiscRgba produces transparent corners and spindle hole" {

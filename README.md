@@ -128,7 +128,9 @@ Tutti gli argomenti non riconosciuti da `vinyl` vengono inoltrati direttamente a
 | `t` | Alterna la reattività del visualizer tra **`1:1`** *(default, zero smoothing/delay)* e **`smooth`** *(attack/release morbido + Catmull-Rom)* |
 | `k` | Alterna la colorazione del visualizer tra **`freq`** *(default, sfumatura/bande `rebeccapurple`/`teal`/`yellow`)* e **`cover`** *(palette della traccia: dB su `path`/`peak`, 3 tonalità su `ellipsis`)* |
 | `g` | Attiva/disattiva il bagliore sidechain sui colpi di cassa (100–300 Hz) attorno al disco |
+| `1` / `2` | Diminuisce / aumenta l'intensità del **bagliore cassa** (`20%`–`300%`, step ±20%) |
 | `a` | Attiva/disattiva l'aurora scura temporalesca ai lati dello schermo sui sub-bassi (20–80 Hz) |
+| `3` / `4` | Diminuisce / aumenta l'intensità dell'**aurora sub-bassi** (`20%`–`300%`, step ±20%) |
 | `c` | Alterna i colori di bagliore cassa e aurora tra quelli derivati dalla copertina/scurimento (`cover`) e quelli coerenti con la frequenza predominante (`rebeccapurple` per aurora, tra `rebeccapurple` e `teal` per cassa) |
 | `d` | Cicla la risoluzione massima del disco Kitty: `512px` *(default)* → `768px` (ultra) → `384px` (veloce) |
 | `x` | Attiva/disattiva l'antialiasing del disco (bordo circolare + filtro bilineare vs nearest-neighbor) |
