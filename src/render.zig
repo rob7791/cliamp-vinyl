@@ -130,6 +130,7 @@ pub const PeakMode = enum { ellipsis, ellipsis2, path, peak };
 pub const VizMotion = enum { raw, smooth };
 pub const VizColor = enum { freq, cover };
 pub const FxColorMode = enum { cover, spectrum };
+pub const WaveStyle = enum { filaments, rings };
 pub const InfoMode = enum { auto, show, hide };
 pub const DiscStyle = enum {
     cover,
@@ -193,6 +194,7 @@ pub const Params = struct {
     aurora: bool = true,
     star_level: u8 = 3,
     wave_level: u8 = 4,
+    wave_style: WaveStyle = .filaments,
     glow_gain: f32 = 1.0,
     aurora_gain: f32 = 1.0,
     fx_color: FxColorMode = .cover,
@@ -614,7 +616,7 @@ pub const Renderer = struct {
                 self.drawAurora(s, s.rows, p.fx_color, p.aurora_gain);
             }
             if (p.wave_level > 0) {
-                self.drawFilaments(s, cx, cy, r0 + ring_min, k, s.rows, pal.c1, pal.c2, p.fx_color, p.wave_level);
+                self.drawFilaments(s, cx, cy, rd, r0 + ring_min, k, s.rows, pal.c1, pal.c2, p.fx_color, p.wave_level, p.wave_style);
             }
             if (p.star_level > 0) {
                 self.drawStars(s, cx, cy, r0 + ring_min, k, pal.c2, p.viz_color);
@@ -1274,8 +1276,8 @@ pub const Renderer = struct {
         }
     }
 
-    /// Renders thin, crisp, low-opacity translucent Braille wave filaments elongating upward from bottom then fading out.
-    fn drawFilaments(self: *const Renderer, s: *Screen, cx: f32, cy: f32, excl_r: f32, k: f32, vis_rows: usize, c1: [3]f32, c2: [3]f32, fx_color: FxColorMode, level: u8) void {
+    /// Renders thin, crisp, low-opacity translucent Braille mid-range waves (rising filaments or expanding concentric rings).
+    fn drawFilaments(self: *const Renderer, s: *Screen, cx: f32, cy: f32, rd: f32, excl_r: f32, k: f32, vis_rows: usize, c1: [3]f32, c2: [3]f32, fx_color: FxColorMode, level: u8, wave_style: WaveStyle) void {
         if (s.cols < 8 or vis_rows < 4 or level == 0) return;
         var any = false;
         for (self.filaments) |f| {
@@ -1297,9 +1299,75 @@ pub const Renderer = struct {
         const inv_cols = 1.0 / cols_f;
         const inv_rows = 1.0 / rows_f;
         const excl_r2 = (excl_r + 1.0) * (excl_r + 1.0);
-        // Very subtle low-opacity filament core + even fainter soft halo around it
+        // Very subtle low-opacity core + even fainter soft halo around it
         const base_alpha = std.math.clamp(0.055 + @as(f32, @floatFromInt(level)) * 0.0085, 0.05, 0.14);
         const halo_gain = base_alpha * 0.15;
+
+        if (wave_style == .rings) {
+            const max_expand = @max(cx, cy) * 1.18;
+            const ring_half_w = k * 0.16;
+            for (0..vis_rows) |r| {
+                const cell_y0 = @as(f32, @floatFromInt(r));
+                const ddy_m = (cell_y0 + 0.5) * k - cy;
+                const ddy_m2 = ddy_m * ddy_m;
+                for (0..s.cols) |c| {
+                    const cell_x0 = @as(f32, @floatFromInt(c));
+                    const ddx_m = cell_x0 + 0.5 - cx;
+                    const d2_m = ddx_m * ddx_m + ddy_m2;
+                    if (d2_m < excl_r2) continue;
+                    const cell = s.at(c, r);
+                    if (cell.cp != ' ') continue;
+
+                    const rho_m = @sqrt(d2_m);
+                    var bits: u8 = 0;
+                    var max_a: f32 = 0;
+                    var halo_a: f32 = 0;
+
+                    for (self.filaments) |f| {
+                        if (!f.active) continue;
+                        const prog = std.math.clamp(f.age / f.max_life, 0.0, 1.0);
+                        const r_ring = rd + prog * max_expand;
+                        if (@abs(rho_m - r_ring) > 4.2) continue;
+
+                        const fade_in = smoothstep(0.0, 0.14, prog);
+                        const fade_out = smoothstep(1.0, 0.22, prog);
+                        const life_a = fade_in * fade_out;
+                        if (life_a <= 0.01) continue;
+
+                        const d_halo = @abs(rho_m - r_ring);
+                        if (d_halo < 3.5) {
+                            halo_a += f.strength * life_a * @exp(-(d_halo * d_halo) / 3.2);
+                        }
+                        if (d_halo > k + 1.5) continue;
+
+                        for (0..4) |j| {
+                            const dy = (cell_y0 + 0.125 + 0.25 * @as(f32, @floatFromInt(j))) * k - cy;
+                            const dy2 = dy * dy;
+                            for (0..2) |i| {
+                                const dx = cell_x0 + 0.25 + 0.5 * @as(f32, @floatFromInt(i)) - cx;
+                                const rho = @sqrt(dx * dx + dy2);
+                                if (@abs(rho - r_ring) <= ring_half_w) {
+                                    bits |= dot_bits[j][i];
+                                    const a = f.strength * life_a;
+                                    if (a > max_a) max_a = a;
+                                }
+                            }
+                        }
+                    }
+                    if (halo_a > 0.02) {
+                        const h_amt = std.math.clamp(halo_a * halo_gain, 0.0, 0.03);
+                        const bg = toRgb(mix3(toF(cell.bg), fil_col, h_amt));
+                        cell.bg = bg;
+                        cell.fg = bg;
+                    }
+                    if (bits == 0 or max_a <= 0.02) continue;
+                    const alpha = std.math.clamp(max_a * base_alpha, 0.0, 0.15);
+                    cell.cp = 0x2800 + @as(u21, bits);
+                    cell.fg = toRgb(mix3(toF(cell.bg), fil_col, alpha));
+                }
+            }
+            return;
+        }
 
         for (0..vis_rows) |r| {
             const cell_y0 = @as(f32, @floatFromInt(r));
@@ -1663,6 +1731,7 @@ pub const Renderer = struct {
                 " 1/2 3/4 intensità glow / aurora",
                 " 5 / 6   quantità stelline (0..10)",
                 " 7 / 8   filamenti medi (0..10)",
+                " 9       onde filamenti / cerchi",
                 " c       colori fx cover/freq",
                 " d / x   risoluzione / AA disco",
                 " o       stile cover/vinyl/v.art/CD",

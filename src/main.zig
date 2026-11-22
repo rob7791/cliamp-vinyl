@@ -208,6 +208,7 @@ pub fn main() !void {
     var aurora = true;
     var star_level: u8 = 3;
     var wave_level: u8 = 4;
+    var wave_style: render.WaveStyle = .filaments;
     var glow_gain: f32 = 1.0;
     var aurora_gain: f32 = 1.0;
     var fx_color: render.FxColorMode = .cover;
@@ -366,6 +367,11 @@ pub fn main() !void {
                 '8' => {
                     if (wave_level < 10) wave_level += 1;
                     hud_msg = std.fmt.bufPrint(&hud_buf, " waves: {d} ", .{wave_level}) catch " waves ";
+                    hud_timer = 2.0;
+                },
+                '9' => {
+                    wave_style = if (wave_style == .filaments) .rings else .filaments;
+                    hud_msg = if (wave_style == .rings) " waves: rings " else " waves: filaments ";
                     hud_timer = 2.0;
                 },
                 '1' => {
@@ -601,6 +607,7 @@ pub fn main() !void {
             .aurora = aurora,
             .star_level = star_level,
             .wave_level = wave_level,
+            .wave_style = wave_style,
             .glow_gain = glow_gain,
             .aurora_gain = aurora_gain,
             .fx_color = fx_color,
