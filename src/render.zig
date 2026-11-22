@@ -1328,7 +1328,7 @@ pub const Renderer = struct {
         const dot_bits = [4][2]u8{ .{ 0x01, 0x08 }, .{ 0x02, 0x10 }, .{ 0x04, 0x20 }, .{ 0x40, 0x80 } };
         const excl_r2 = (excl_r + 1.0) * (excl_r + 1.0);
         const g = std.math.clamp(glow_gain, 0.2, 3.0);
-        const base_alpha = std.math.clamp(0.19 * (0.7 + 0.3 * g), 0.10, 0.32);
+        const base_alpha = std.math.clamp(0.095 * (0.7 + 0.3 * g), 0.05, 0.16);
         const halo_gain = base_alpha * 0.15;
         const max_expand = @max(cx, cy) * 1.18;
         const ring_half_w = k * 0.16;
@@ -1386,13 +1386,13 @@ pub const Renderer = struct {
                     }
                 }
                 if (halo_a > 0.02) {
-                    const h_amt = std.math.clamp(halo_a * halo_gain, 0.0, 0.06);
+                    const h_amt = std.math.clamp(halo_a * halo_gain, 0.0, 0.03);
                     const bg = toRgb(mix3(toF(cell.bg), ring_col, h_amt));
                     cell.bg = bg;
                     cell.fg = bg;
                 }
                 if (bits == 0 or max_a <= 0.02) continue;
-                const alpha = std.math.clamp(max_a * base_alpha, 0.0, 0.32);
+                const alpha = std.math.clamp(max_a * base_alpha, 0.0, 0.16);
                 cell.cp = 0x2800 + @as(u21, bits);
                 cell.fg = toRgb(mix3(toF(cell.bg), ring_col, alpha));
             }
