@@ -336,10 +336,13 @@ pub const Renderer = struct {
         var kick_u_num: f32 = 0;
         var kick_u_den: f32 = 0;
         var kick_cnt: f32 = 0;
-        // Ultra-high frequencies (~9.5–16 kHz, u >= 0.92): cymbals, hi-hat sizzle, chimes only
+        // Ultra-high frequencies (~10–16 kHz, u >= 0.93) vs tonal mid-highs (~1.2–5.5 kHz, u in [0.60, 0.85])
+        // Comparing air vs tonal_hi rejects loud brass/trumpets/vocals whose upper harmonics bleed past 10 kHz
         var air_l_sum: f32 = 0;
         var air_r_sum: f32 = 0;
         var air_cnt: f32 = 0;
+        var tonal_hi_sum: f32 = 0;
+        var tonal_hi_cnt: f32 = 0;
         for (0..n) |i| {
             const u = if (n > 1) @as(f32, @floatFromInt(i)) / nf else 0.0;
             const mono = 0.5 * (raw_l[i] + raw_r[i]);
@@ -356,7 +359,11 @@ pub const Renderer = struct {
                 kick_u_den += mono;
                 kick_cnt += 1.0;
             }
-            if (u >= 0.92) {
+            if (u >= 0.60 and u <= 0.85) {
+                tonal_hi_sum += mono;
+                tonal_hi_cnt += 1.0;
+            }
+            if (u >= 0.93) {
                 air_l_sum += raw_l[i];
                 air_r_sum += raw_r[i];
                 air_cnt += 1.0;
@@ -434,12 +441,15 @@ pub const Renderer = struct {
         const sub_avg = 0.5 * (self.sub_l + self.sub_r);
         self.aurora_phase = @mod(self.aurora_phase + p.dt * (0.9 + 2.8 * sub_avg), TAU * 16.0);
 
-        // High-frequency sparkle/star emitter (~5–16 kHz)
+        // High-frequency sparkle/star emitter (~10–16 kHz, gated by spectral tilt against 1.2–5.5 kHz brass/vocals)
         const air_l: f32 = if (air_cnt > 0) std.math.clamp(air_l_sum / air_cnt, 0, 1) else 0;
         const air_r: f32 = if (air_cnt > 0) std.math.clamp(air_r_sum / air_cnt, 0, 1) else 0;
-        const air_e: f32 = 0.5 * (air_l + air_r);
+        const tonal_hi: f32 = if (tonal_hi_cnt > 0) std.math.clamp(tonal_hi_sum / tonal_hi_cnt, 0, 1) else 0;
+        const air_raw: f32 = 0.5 * (air_l + air_r);
+        // Only pass energy that exceeds the harmonic roll-off of tonal instruments (trumpets/brass/snares)
+        const air_e: f32 = @max(0.0, air_raw - tonal_hi * 0.72);
         const air_flux: f32 = @max(0.0, air_e - self.air_avg);
-        self.air_avg += (air_e - self.air_avg) * @min(1.0, p.dt * 7.0);
+        self.air_avg += (air_e - self.air_avg) * @min(1.0, p.dt * 8.0);
         self.updateStars(p.dt, air_l, air_r, air_e, air_flux, p.star_level);
 
         for (0..ANG) |a| {
