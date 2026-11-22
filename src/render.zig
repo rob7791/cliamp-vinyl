@@ -136,6 +136,7 @@ pub const Texture = struct {
 
 pub const BgMode = enum { tint, black };
 pub const PeakMode = enum { ellipsis, ellipsis2, path, peak };
+pub const VizLayout = enum { circular, linear, off };
 pub const VizMotion = enum { raw, smooth };
 pub const VizColor = enum { freq, cover };
 pub const FxColorMode = enum { cover, spectrum };
@@ -197,6 +198,7 @@ pub const Params = struct {
     bpm: f32 = 0,
     show_rpm: bool = false,
     peak_mode: PeakMode = .path,
+    viz_layout: VizLayout = .circular,
     viz_motion: VizMotion = .raw,
     viz_color: VizColor = .freq,
     glow: bool = true,
@@ -647,16 +649,22 @@ pub const Renderer = struct {
         const cols = s.cols;
         const rows = s.rows;
         const info_rows: usize = if (rows >= 16) 4 else 0;
-        const vis_rows = rows - info_rows;
+        const lin_rows: usize = if (p.viz_layout == .linear and rows >= 16) std.math.clamp(rows / 5, 5, 11) else 0;
+        const top_pad: usize = if (p.viz_layout == .linear) info_rows else 0;
+        const bot_pad: usize = if (p.viz_layout == .linear) lin_rows else info_rows;
+        const vis_rows = rows -| (top_pad + bot_pad);
         const k = p.aspect;
 
-        // Cell-aligned disc placement box centered in (0..cols, 0..vis_rows).
+        // Cell-aligned disc placement box centered in (0..cols, top_pad..top_pad+vis_rows).
         const cx0: f32 = @as(f32, @floatFromInt(cols)) * 0.5;
         const cy0: f32 = @as(f32, @floatFromInt(vis_rows)) * k * 0.5;
         const rmax = @min(cx0, cy0) - 0.3;
         const ring_h = rmax * 0.27;
         const margin = @max(rmax * 0.05, k * 0.8);
-        const rd_raw = rmax - ring_h - margin;
+        const rd_raw = if (p.viz_layout == .circular)
+            rmax - ring_h - margin
+        else
+            rmax * 0.86;
         const ring_min: f32 = 0.35;
 
         var disc_col0: usize = 0;
@@ -670,7 +678,7 @@ pub const Renderer = struct {
             const half_cols = @max(2, @as(usize, @intFromFloat(@round(@as(f32, @floatFromInt(disc_rows)) * 0.5 * k))));
             disc_cols = @min(cols, half_cols * 2);
             disc_col0 = (cols - disc_cols) / 2;
-            disc_row0 = (vis_rows - disc_rows) / 2;
+            disc_row0 = top_pad + (vis_rows - disc_rows) / 2;
 
             const box_w: f32 = @floatFromInt(disc_cols);
             const box_h: f32 = @as(f32, @floatFromInt(disc_rows)) * k;
@@ -688,17 +696,22 @@ pub const Renderer = struct {
             if (p.aurora and (self.sub_l > 0.004 or self.sub_r > 0.004)) {
                 self.drawAurora(s, s.rows, p.fx_color, p.aurora_gain);
             }
+            const excl_r = if (p.viz_layout == .circular) r0 + ring_min else rd + 1.0;
             if (p.wave_level > 0) {
-                self.drawFilaments(s, cx, cy, r0 + ring_min, k, s.rows, pal.c1, pal.c2, p.fx_color, p.wave_level);
+                self.drawFilaments(s, cx, cy, excl_r, k, s.rows, pal.c1, pal.c2, p.fx_color, p.wave_level);
             }
             if (p.ring_mode != .off) {
-                const ring_start = r0 + ring_min + ring_h;
+                const ring_start = if (p.viz_layout == .circular) r0 + ring_min + ring_h else rd + margin;
                 self.drawKickRings(s, cx, cy, ring_start, ring_start, k, s.rows, pal.c1, pal.c2, p.fx_color, p.glow_gain);
             }
             if (p.star_level > 0) {
-                self.drawStars(s, cx, cy, r0 + ring_min, k, pal.c2, p.viz_color);
+                self.drawStars(s, cx, cy, excl_r, k, pal.c2, p.viz_color);
             }
-            self.drawRing(s, &p, cx, cy, rd, r0, ring_h, ring_min, vis_rows, pal.c1, pal.c2, bgf);
+            switch (p.viz_layout) {
+                .circular => self.drawRing(s, &p, cx, cy, rd, r0, ring_h, ring_min, vis_rows, pal.c1, pal.c2, bgf),
+                .linear => if (lin_rows > 0) self.drawLinear(s, &p, rows - lin_rows, lin_rows, pal.c1, pal.c2),
+                .off => {},
+            }
 
             if (p.kitty_enc) |enc| {
                 const est_px: usize = if (p.cell_px_w > 0)
@@ -750,7 +763,7 @@ pub const Renderer = struct {
             self.disc_active = false;
         }
 
-        self.drawInfo(s, &p, vis_rows, disc_col0, disc_row0, disc_cols, disc_rows, pal.c1, pal.c2, bg);
+        self.drawInfo(s, &p, vis_rows, info_rows, disc_col0, disc_row0, disc_cols, disc_rows, pal.c1, pal.c2, bg);
     }
 
     fn ensureDiscLut(self: *Renderer, side: usize, box_w: f32, box_h: f32, rd: f32, rh: f32, aa: bool, style: DiscStyle) void {
@@ -1773,11 +1786,109 @@ pub const Renderer = struct {
         }
     }
 
+    /// Renders a symmetrical stereo linear Braille spectrum along the bottom of the screen.
+    fn drawLinear(self: *const Renderer, s: *Screen, p: *const Params, row0: usize, bar_rows: usize, c1: [3]f32, c2: [3]f32) void {
+        if (s.cols < 4 or bar_rows == 0 or row0 >= s.rows) return;
+        const dot_bits = [4][2]u8{ .{ 0x01, 0x08 }, .{ 0x02, 0x10 }, .{ 0x04, 0x20 }, .{ 0x40, 0x80 } };
+        const white = [3]f32{ 255, 255, 255 };
+        const total_h: f32 = @floatFromInt(bar_rows * 4);
+        const half_w: f32 = @as(f32, @floatFromInt(s.cols)) * 0.5;
+        const inv_half: f32 = 1.0 / @max(1.0, half_w);
+        const half_ang = ANG / 2;
+
+        const band_low_col: Rgb = if (p.viz_color == .freq) .{ .r = 102, .g = 51, .b = 153 } else toRgb(mix3(c1, .{ 16, 12, 20 }, 0.48));
+        const band_mid_col: Rgb = if (p.viz_color == .freq)
+            (if (p.peak_mode == .ellipsis2) Rgb{ .r = 0, .g = 185, .b = 185 } else Rgb{ .r = 0, .g = 128, .b = 128 })
+        else
+            (if (p.peak_mode == .ellipsis2) brightSaturate(c1) else toRgb(c1));
+        const band_high_col: Rgb = if (p.viz_color == .freq) .{ .r = 255, .g = 255, .b = 0 } else toRgb(mix3(c2, white, 0.52));
+
+        for (0..bar_rows) |dr| {
+            const r = row0 + dr;
+            if (r >= s.rows) break;
+            for (0..s.cols) |c| {
+                var bits: u8 = 0;
+                var acc = [3]f32{ 0, 0, 0 };
+                var lit: f32 = 0;
+                for (0..2) |i| {
+                    const sx = @as(f32, @floatFromInt(c)) + 0.25 + 0.5 * @as(f32, @floatFromInt(i));
+                    const right_side = sx >= half_w;
+                    // Symmetrical stereo: center = bass (or highs if inverted with 'i'), outer edges = highs
+                    const dist_center = std.math.clamp(@abs(sx - half_w) * inv_half, 0.0, 1.0);
+                    const u = if (p.bass_top) 1.0 - dist_center else dist_center;
+                    // Map (right_side, u) to existing ANG array index
+                    const t_ang = if (p.bass_top) u else 1.0 - u;
+                    const sub_idx: usize = @min(@as(usize, half_ang - 1), @as(usize, @intFromFloat(t_ang * @as(f32, @floatFromInt(half_ang)))));
+                    const idx: usize = if (right_side) sub_idx else (ANG - 1) - sub_idx;
+
+                    const v = self.amp[idx];
+                    const h_val = 0.6 + v * (total_h - 1.2);
+                    const pk_val = 0.6 + self.peak[idx] * (total_h - 1.2);
+
+                    for (0..4) |j| {
+                        // Height from bottom edge of linear visualizer (0 at bottom .. total_h at top)
+                        const y_from_bot = total_h - (@as(f32, @floatFromInt(dr * 4 + j)) + 0.5);
+                        var col: [3]f32 = undefined;
+                        if (p.peak_mode == .ellipsis or p.peak_mode == .ellipsis2) {
+                            const h_low = 0.6 + (if (p.peak_mode == .ellipsis2) self.ell2_low[idx] else self.path_low[idx]) * (total_h - 1.2);
+                            const h_mid = 0.6 + (if (p.peak_mode == .ellipsis2) self.ell2_mid[idx] else self.path_mid[idx]) * (total_h - 1.2);
+                            const h_high = 0.6 + (if (p.peak_mode == .ellipsis2) self.ell2_high[idx] else self.path_high[idx]) * (total_h - 1.2);
+                            if (p.peak_mode == .ellipsis2) {
+                                if (self.ell2_mid[idx] > 0.01 and y_from_bot <= h_mid) {
+                                    col = toF(band_mid_col);
+                                } else if (self.ell2_high[idx] > 0.01 and y_from_bot <= h_high) {
+                                    col = toF(band_high_col);
+                                } else if (self.ell2_low[idx] > 0.01 and y_from_bot <= h_low) {
+                                    col = toF(band_low_col);
+                                } else continue;
+                            } else {
+                                if (self.path_low[idx] > 0.01 and @abs(y_from_bot - h_low) <= 0.75) {
+                                    col = toF(band_low_col);
+                                } else if (self.path_mid[idx] > 0.01 and @abs(y_from_bot - h_mid) <= 0.75) {
+                                    col = toF(band_mid_col);
+                                } else if (self.path_high[idx] > 0.01 and @abs(y_from_bot - h_high) <= 0.75) {
+                                    col = toF(band_high_col);
+                                } else continue;
+                            }
+                        } else if (y_from_bot <= h_val) {
+                            if (p.viz_color == .freq) {
+                                col = pathBandColor(u);
+                                if (p.peak_mode == .peak) {
+                                    const dim = 0.65 + 0.35 * std.math.clamp(v * 1.3 + 0.15, 0, 1);
+                                    col = .{ col[0] * dim, col[1] * dim, col[2] * dim };
+                                }
+                            } else {
+                                const q = std.math.clamp(y_from_bot / total_h, 0, 1);
+                                col = mix3(c1, c2, q);
+                                if (h_val - y_from_bot < 1.2) col = mix3(col, white, 0.35);
+                                const dim = 0.55 + 0.45 * std.math.clamp(v * 1.4 + 0.2, 0, 1);
+                                col = .{ col[0] * dim, col[1] * dim, col[2] * dim };
+                            }
+                        } else if (p.peak_mode == .peak and @abs(y_from_bot - (pk_val + 1.0)) <= 0.75 and self.peak[idx] > v + 0.02) {
+                            col = if (p.viz_color == .freq) mix3(pathBandColor(u), white, 0.45) else mix3(c2, white, 0.5);
+                        } else continue;
+
+                        bits |= dot_bits[j][i];
+                        acc[0] += col[0];
+                        acc[1] += col[1];
+                        acc[2] += col[2];
+                        lit += 1;
+                    }
+                }
+                if (bits == 0) continue;
+                const cell = s.at(c, r);
+                cell.cp = 0x2800 + @as(u21, bits);
+                cell.fg = toRgb(.{ acc[0] / lit, acc[1] / lit, acc[2] / lit });
+            }
+        }
+    }
+
     fn drawInfo(
         self: *Renderer,
         s: *Screen,
         p: *const Params,
         vis_rows: usize,
+        info_rows: usize,
         disc_col0: usize,
         disc_row0: usize,
         disc_cols: usize,
@@ -1828,6 +1939,7 @@ pub const Renderer = struct {
                 " [ / ]   spin ∓5 RPM ({/} ∓1)",
                 " v / 0   preset RPM / reset",
                 " w       path/ellip/ellip2/peak",
+                " u       bande cerchio/basso/off",
                 " t / k   viz 1:1/smooth / colori",
                 " g / a   bagliore / aurora on/off",
                 " 1/2 3/4 intensità glow / aurora",
@@ -1855,9 +1967,13 @@ pub const Renderer = struct {
             for (lines, 0..) |l, i| _ = s.text(col_start, row_start + i, l, light, false);
         }
 
-        if (vis_rows == s.rows or p.info_alpha <= 0.01) return;
+        if (info_rows == 0 or p.info_alpha <= 0.01) return;
         const ia = std.math.clamp(p.info_alpha, 0.0, 1.0);
-        const r1 = vis_rows + 1;
+        // In linear layout (spectrum at bottom), move track info + seekbar to the top of the screen
+        const r1: usize = if (p.viz_layout == .linear)
+            (if (top_hud or p.kitty_warn) 1 else 0)
+        else
+            vis_rows + 1;
         if (!snap.connected) {
             centeredAlpha(s, r1, "in attesa di cliamp... (avvia `cliamp` o lascia che vinyl lanci il demone)", dim, false, ia);
             return;

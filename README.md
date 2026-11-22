@@ -125,6 +125,7 @@ Tutti gli argomenti non riconosciuti da `vinyl` vengono inoltrati direttamente a
 | `v` | Cicla i preset vinile (`5`, `16.7`, `28`, `33.3`, `45`, `78`, `0` RPM) in modalità manuale |
 | `0` | Ripristina la modalità automatica legata ai BPM della traccia (o `5` RPM se i BPM non sono disponibili) |
 | `w` | Cicla la forma del visualizer: `path` *(default)* → `ellipsis` (3 contorni ellisse+picchi) → `ellipsis2` (3 ellissi pure scalate al picco massimo di ciascuna banda) → `peak` (bande + trattini con decay) |
+| `u` | Cicla il layout delle bande visualizer: `circular` *(default, attorno al vinile)* → `linear` *(lineare in basso allo schermo, info/seekbar spostate in alto)* → `off` *(nessuna banda)* |
 | `t` | Alterna la reattività del visualizer tra **`1:1`** *(default, zero smoothing/delay)* e **`smooth`** *(attack/release morbido + Catmull-Rom)* |
 | `k` | Alterna la colorazione del visualizer tra **`freq`** *(default, sfumatura/bande `rebeccapurple`/`teal`/`yellow`)* e **`cover`** *(palette della traccia: dB su `path`/`peak`, 3 tonalità su `ellipsis`)* |
 | `g` | Attiva/disattiva il bagliore sidechain sui colpi di cassa (100–300 Hz) attorno al disco |

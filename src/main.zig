@@ -202,6 +202,7 @@ pub fn main() !void {
     var rpm: f32 = opts.rpm orelse default_rpm;
     var rpm_hud_timer: f32 = 0;
     var peak_mode: render.PeakMode = .path;
+    var viz_layout: render.VizLayout = .circular;
     var viz_motion: render.VizMotion = .raw;
     var viz_color: render.VizColor = .freq;
     var glow = true;
@@ -320,6 +321,19 @@ pub fn main() !void {
                         .ellipsis => " viz: ellipsis ",
                         .ellipsis2 => " viz: ellipsis2 ",
                         .peak => " viz: peak ",
+                    };
+                    hud_timer = 2.0;
+                },
+                'u' => {
+                    viz_layout = switch (viz_layout) {
+                        .circular => .linear,
+                        .linear => .off,
+                        .off => .circular,
+                    };
+                    hud_msg = switch (viz_layout) {
+                        .circular => " layout: circular ",
+                        .linear => " layout: linear ",
+                        .off => " layout: off ",
                     };
                     hud_timer = 2.0;
                 },
@@ -609,6 +623,7 @@ pub fn main() !void {
             .bpm = track_bpm,
             .show_rpm = rpm_hud_timer > 0,
             .peak_mode = peak_mode,
+            .viz_layout = viz_layout,
             .viz_motion = viz_motion,
             .viz_color = viz_color,
             .glow = glow,
