@@ -208,7 +208,7 @@ pub fn main() !void {
     var aurora = true;
     var star_level: u8 = 3;
     var wave_level: u8 = 4;
-    var kick_rings = true;
+    var kick_rings = false;
     var glow_gain: f32 = 1.0;
     var aurora_gain: f32 = 1.0;
     var fx_color: render.FxColorMode = .cover;

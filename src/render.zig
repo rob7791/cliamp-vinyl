@@ -202,7 +202,7 @@ pub const Params = struct {
     aurora: bool = true,
     star_level: u8 = 3,
     wave_level: u8 = 4,
-    kick_rings: bool = true,
+    kick_rings: bool = false,
     glow_gain: f32 = 1.0,
     aurora_gain: f32 = 1.0,
     fx_color: FxColorMode = .cover,
@@ -1324,7 +1324,10 @@ pub const Renderer = struct {
         }
         if (!any) return;
 
-        const cover_col = mix3(mix3(c1, c2, 0.35), .{ 245, 240, 230 }, 0.25);
+        _ = c1;
+        _ = c2;
+        _ = fx_color;
+        const default_col = pathBandColor(0.34);
         const dot_bits = [4][2]u8{ .{ 0x01, 0x08 }, .{ 0x02, 0x10 }, .{ 0x04, 0x20 }, .{ 0x40, 0x80 } };
         const excl_r2 = (excl_r + 1.0) * (excl_r + 1.0);
         const g = std.math.clamp(glow_gain, 0.2, 3.0);
@@ -1349,7 +1352,7 @@ pub const Renderer = struct {
                 var bits: u8 = 0;
                 var max_a: f32 = 0;
                 var halo_a: f32 = 0;
-                var ring_col = cover_col;
+                var ring_col = default_col;
 
                 for (self.kick_rings_pool) |kr| {
                     if (!kr.active) continue;
@@ -1365,6 +1368,7 @@ pub const Renderer = struct {
                     const d_halo = @abs(rho_m - r_ring);
                     if (d_halo < 3.5) {
                         halo_a += kr.strength * life_a * @exp(-(d_halo * d_halo) / 3.2);
+                        if (max_a == 0) ring_col = pathBandColor(kr.dom_u);
                     }
                     if (d_halo > k + 1.5) continue;
 
@@ -1379,7 +1383,7 @@ pub const Renderer = struct {
                                 const a = kr.strength * life_a;
                                 if (a > max_a) {
                                     max_a = a;
-                                    if (fx_color == .spectrum) ring_col = pathBandColor(kr.dom_u);
+                                    ring_col = pathBandColor(kr.dom_u);
                                 }
                             }
                         }
