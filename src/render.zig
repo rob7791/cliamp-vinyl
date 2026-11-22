@@ -1287,7 +1287,9 @@ pub const Renderer = struct {
         const inv_cols = 1.0 / cols_f;
         const inv_rows = 1.0 / rows_f;
         const excl_r2 = (excl_r + 1.0) * (excl_r + 1.0);
-        const base_alpha = std.math.clamp(0.18 + @as(f32, @floatFromInt(level)) * 0.028, 0.16, 0.44);
+        // Very subtle low-opacity filament core + even fainter soft halo around it
+        const base_alpha = std.math.clamp(0.11 + @as(f32, @floatFromInt(level)) * 0.017, 0.10, 0.28);
+        const halo_gain = base_alpha * 0.34;
 
         for (0..vis_rows) |r| {
             const cell_y0 = @as(f32, @floatFromInt(r));
@@ -1310,13 +1312,15 @@ pub const Renderer = struct {
 
                 var bits: u8 = 0;
                 var max_a: f32 = 0;
+                var halo_a: f32 = 0;
                 const cell_x0 = @as(f32, @floatFromInt(c));
+                const sx_mid = cell_x0 + 0.5;
 
                 for (self.filaments) |f| {
                     if (!f.active) continue;
                     if (ny_mid < f.y_head - 0.03 or ny_mid > f.y_base + 0.03) continue;
-                    const nx_cell = (cell_x0 + 0.5) * inv_cols;
-                    if (@abs(nx_cell - f.x0) > f.sway + 2.5 * inv_cols) continue;
+                    const nx_cell = sx_mid * inv_cols;
+                    if (@abs(nx_cell - f.x0) > f.sway + 4.0 * inv_cols) continue;
 
                     const cur_len = @max(0.02, f.y_base - f.y_head);
                     const fade_in = smoothstep(0.0, 0.22, f.age);
@@ -1324,6 +1328,20 @@ pub const Renderer = struct {
                     const life_a = fade_in * fade_out;
                     if (life_a <= 0.01) continue;
                     const half_w_cols = f.width * 0.42;
+
+                    // Faint background halo around the filament centerline
+                    if (ny_mid >= f.y_head and ny_mid <= f.y_base) {
+                        const along_m = (ny_mid - f.y_head) / cur_len;
+                        const sway_m = 0.25 + 0.75 * (1.0 - along_m);
+                        const wx_m = (f.x0 + f.sway * sway_m * @sin(ny_mid * f.freq + f.phase)) * cols_f;
+                        const d_halo = @abs(sx_mid - wx_m);
+                        if (d_halo < 3.5) {
+                            const g_fall = @exp(-(d_halo * d_halo) / 3.2);
+                            const tip_m = smoothstep(0.0, 0.14, along_m);
+                            const base_m = smoothstep(1.0, 0.84, along_m);
+                            halo_a += f.strength * life_a * tip_m * base_m * g_fall;
+                        }
+                    }
 
                     for (0..4) |j| {
                         const sy = cell_y0 + 0.125 + 0.25 * @as(f32, @floatFromInt(j));
@@ -1347,8 +1365,14 @@ pub const Renderer = struct {
                         }
                     }
                 }
+                if (halo_a > 0.02) {
+                    const h_amt = std.math.clamp(halo_a * halo_gain, 0.0, 0.14);
+                    const bg = toRgb(mix3(toF(cell.bg), fil_col, h_amt));
+                    cell.bg = bg;
+                    cell.fg = bg;
+                }
                 if (bits == 0 or max_a <= 0.02) continue;
-                const alpha = std.math.clamp(max_a * base_alpha, 0.0, 0.48);
+                const alpha = std.math.clamp(max_a * base_alpha, 0.0, 0.30);
                 cell.cp = 0x2800 + @as(u21, bits);
                 cell.fg = toRgb(mix3(toF(cell.bg), fil_col, alpha));
             }
