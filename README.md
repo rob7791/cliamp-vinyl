@@ -131,7 +131,7 @@ Tutti gli argomenti non riconosciuti da `vinyl` vengono inoltrati direttamente a
 | `1` / `2` | Diminuisce / aumenta l'intensità del **bagliore cassa** (`20%`–`300%`, step ±20%) |
 | `a` | Attiva/disattiva l'aurora scura temporalesca ai lati dello schermo sui sub-bassi (20–80 Hz) |
 | `3` / `4` | Diminuisce / aumenta l'intensità dell'**aurora sub-bassi** (`20%`–`300%`, step ±20%) |
-| `c` | Alterna i colori di bagliore cassa e aurora tra quelli derivati dalla copertina/scurimento (`cover`) e quelli coerenti con la frequenza predominante (`rebeccapurple` per aurora, tra `rebeccapurple` e `teal` per cassa) |
+| `c` | Alterna il colore del **bagliore cassa** tra quello derivato dalla copertina (`cover`) e quello coerente con la frequenza predominante (tra `rebeccapurple` e `teal`); l'**aurora** mantiene sempre la tonalità `rebeccapurple` |
 | `d` | Cicla la risoluzione massima del disco Kitty: `512px` *(default)* → `768px` (ultra) → `384px` (veloce) |
 | `x` | Attiva/disattiva l'antialiasing del disco (bordo circolare + filtro bilineare vs nearest-neighbor) |
 | `o` | Cicla lo stile del disco: `cover` *(default, copertina circolare dritta senza foro centrale né rotazione)* → `vinyl` *(vinile nero con etichetta colorata)* → `vinyl art` *(vinile nero con copertina nell'etichetta centrale)* → `CD` *(compact disc con foro/hub trasparente e bordo esterno in plastica semitrasparente)* |

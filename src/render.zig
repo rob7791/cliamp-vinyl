@@ -982,17 +982,9 @@ pub const Renderer = struct {
                 if (amt <= 0.005) continue;
 
                 const cell = s.at(c, r);
-                const bg = switch (fx_color) {
-                    .cover => blk: {
-                        const scale = 1.0 - amt;
-                        break :blk Rgb{
-                            .r = @intFromFloat(@as(f32, @floatFromInt(cell.bg.r)) * scale),
-                            .g = @intFromFloat(@as(f32, @floatFromInt(cell.bg.g)) * scale),
-                            .b = @intFromFloat(@as(f32, @floatFromInt(cell.bg.b)) * scale),
-                        };
-                    },
-                    .spectrum => toRgb(mix3(toF(cell.bg), storm_tint, amt)),
-                };
+                _ = fx_color;
+                // Always use the deep rebeccapurple storm aurora tint so it remains clearly visible in both fx modes
+                const bg = toRgb(mix3(toF(cell.bg), storm_tint, amt));
                 cell.bg = bg;
                 if (cell.cp == ' ') cell.fg = bg;
             }
@@ -1813,7 +1805,9 @@ test "sub-bass storm aurora darkens screen edges on 20-80Hz rumble" {
     const dark_l = s.at(0, 18).bg;
     const dark_r = s.at(119, 18).bg;
     try std.testing.expect(r.sub_l > 0.5 and r.sub_r > 0.5);
-    try std.testing.expect(dark_l.r <= base_l.r and dark_l.g <= base_l.g and dark_l.b <= base_l.b);
-    try std.testing.expect(dark_l.r < base_l.r or dark_l.g < base_l.g or dark_l.b < base_l.b);
-    try std.testing.expect(dark_r.r < base_r.r or dark_r.g < base_r.g or dark_r.b < base_r.b);
+    // Storm aurora tints both screen edges with deep rebeccapurple (b > r > g)
+    try std.testing.expect(dark_l.b > dark_l.r and dark_l.r > dark_l.g);
+    try std.testing.expect(dark_r.b > dark_r.r and dark_r.r > dark_r.g);
+    try std.testing.expect(dark_l.b != base_l.b or dark_l.r != base_l.r);
+    try std.testing.expect(dark_r.b != base_r.b or dark_r.r != base_r.r);
 }
