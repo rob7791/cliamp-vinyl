@@ -22,7 +22,7 @@ const usage =
     \\
     \\Opzioni:
     \\  --fps N             frame al secondo (default: auto da monitor o 60, max 240)
-    \\  --rpm F             velocità manuale disco in RPM (default: auto da BPM o 28)
+    \\  --rpm F             velocità manuale disco in RPM (default: auto da BPM o 5)
     \\  --bars N            barre per canale (default 48)
     \\  --aspect F          rapporto altezza/larghezza cella (default: auto, o 2.1)
     \\  --source NAME       sorgente PulseAudio/PipeWire per cava (default auto)
@@ -195,7 +195,7 @@ pub fn main() !void {
     const frame_ns: i128 = @divTrunc(std.time.ns_per_s, target_fps);
     var next_frame = std.time.nanoTimestamp();
     var last = next_frame;
-    const default_rpm: f32 = 28.0;
+    const default_rpm: f32 = 5.0;
     var angle: f32 = 0;
     var spin: f32 = 0; // rad/s
     var rpm_manual: bool = opts.rpm != null;
@@ -217,7 +217,7 @@ pub fn main() !void {
     var last_track_key: u64 = 0;
     var hud_msg: []const u8 = "";
     var hud_timer: f32 = 0;
-    const rpm_presets = [_]f32{ 28.0, 33.333, 45.0, 78.0, 0.0, 16.666 };
+    const rpm_presets = [_]f32{ 5.0, 16.666, 28.0, 33.333, 45.0, 78.0, 0.0 };
     var sheen = opts.sheen;
     var bass_top = opts.bass_top;
     var show_fps = false;
@@ -304,12 +304,14 @@ pub fn main() !void {
                 'w' => {
                     peak_mode = switch (peak_mode) {
                         .path => .ellipsis,
-                        .ellipsis => .peak,
+                        .ellipsis => .ellipsis2,
+                        .ellipsis2 => .peak,
                         .peak => .path,
                     };
                     hud_msg = switch (peak_mode) {
                         .path => " viz: path ",
                         .ellipsis => " viz: ellipsis ",
+                        .ellipsis2 => " viz: ellipsis2 ",
                         .peak => " viz: peak ",
                     };
                     hud_timer = 2.0;
@@ -412,7 +414,7 @@ pub fn main() !void {
         if (hud_timer > 0) hud_timer = @max(0.0, hud_timer - dt);
         const track_bpm = loader.getBpm();
         if (!rpm_manual) {
-            rpm = if (track_bpm > 0) std.math.clamp(track_bpm * (default_rpm / 120.0), 6.0, 90.0) else default_rpm;
+            rpm = if (track_bpm > 0) std.math.clamp(track_bpm * (default_rpm / 120.0), 1.5, 25.0) else default_rpm;
         }
         const rpm_speed: f32 = rpm / 60.0 * std.math.tau;
         const target: f32 = if (snap.state == .playing) rpm_speed else 0;

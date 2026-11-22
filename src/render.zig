@@ -98,7 +98,7 @@ pub const Texture = struct {
 };
 
 pub const BgMode = enum { tint, black };
-pub const PeakMode = enum { ellipsis, path, peak };
+pub const PeakMode = enum { ellipsis, ellipsis2, path, peak };
 pub const VizMotion = enum { raw, smooth };
 pub const VizColor = enum { freq, cover };
 pub const FxColorMode = enum { cover, spectrum };
@@ -140,7 +140,7 @@ pub const Params = struct {
     show_fps: bool,
     show_help: bool,
     fps: f32,
-    rpm: f32 = 28.0,
+    rpm: f32 = 5.0,
     bpm: f32 = 0,
     show_rpm: bool = false,
     peak_mode: PeakMode = .path,
@@ -175,6 +175,9 @@ pub const Renderer = struct {
     path_low: [ANG]f32 = [_]f32{0} ** ANG,
     path_mid: [ANG]f32 = [_]f32{0} ** ANG,
     path_high: [ANG]f32 = [_]f32{0} ** ANG,
+    ell2_low: [ANG]f32 = [_]f32{0} ** ANG,
+    ell2_mid: [ANG]f32 = [_]f32{0} ** ANG,
+    ell2_high: [ANG]f32 = [_]f32{0} ** ANG,
     peak: [ANG]f32 = [_]f32{0} ** ANG,
     kick_avg: f32 = 0,
     kick_glow: f32 = 0,
@@ -274,6 +277,13 @@ pub const Renderer = struct {
         var high_l: f32 = 0;
         var high_r: f32 = 0;
         var high_w: f32 = 0;
+        // Per-band instantaneous peak maxima for ellipsis2 (pure ellipses sized to highest peak)
+        var max_low_l: f32 = 0;
+        var max_low_r: f32 = 0;
+        var max_mid_l: f32 = 0;
+        var max_mid_r: f32 = 0;
+        var max_high_l: f32 = 0;
+        var max_high_r: f32 = 0;
         // Sub-bass (20–80 Hz) & kick drum (100–300 Hz) always use raw unfiltered spectrum for punchy FX
         // 20–80 Hz => u in [0.0, 0.207]; 100–300 Hz => u in [0.241, 0.405]
         var sub_l_sum: f32 = 0;
@@ -316,6 +326,16 @@ pub const Renderer = struct {
             high_l += src_l[i] * wh;
             high_r += src_r[i] * wh;
             high_w += wh;
+            if (u <= 0.34) {
+                max_low_l = @max(max_low_l, src_l[i]);
+                max_low_r = @max(max_low_r, src_r[i]);
+            } else if (u < 0.67) {
+                max_mid_l = @max(max_mid_l, src_l[i]);
+                max_mid_r = @max(max_mid_r, src_r[i]);
+            } else {
+                max_high_l = @max(max_high_l, src_l[i]);
+                max_high_r = @max(max_high_r, src_r[i]);
+            }
         }
         if (low_w > 0) {
             low_l /= low_w;
@@ -410,6 +430,14 @@ pub const Renderer = struct {
             self.path_low[a] = std.math.clamp(@max(ell_low, v * mask_low), 0, 1.0);
             self.path_mid[a] = std.math.clamp(@max(ell_mid, v * mask_mid), 0, 1.0);
             self.path_high[a] = std.math.clamp(@max(ell_high, v * mask_high), 0, 1.0);
+
+            // ellipsis2: pure smooth ellipses whose major radius reaches each band's highest peak
+            const ml = if (right_side) max_low_r * own + max_low_l * (1 - own) else max_low_l * own + max_low_r * (1 - own);
+            const mm = if (right_side) max_mid_r * own + max_mid_l * (1 - own) else max_mid_l * own + max_mid_r * (1 - own);
+            const mh = if (right_side) max_high_r * own + max_high_l * (1 - own) else max_high_l * own + max_high_r * (1 - own);
+            self.ell2_low[a] = std.math.clamp(ml * env_low, 0, 1.0);
+            self.ell2_mid[a] = std.math.clamp(mm * env_mid, 0, 1.0);
+            self.ell2_high[a] = std.math.clamp(mh * env_high, 0, 1.0);
         }
     }
 
@@ -860,7 +888,7 @@ pub const Renderer = struct {
 
                         var hit_layer: u8 = 0;
                         var hit_path = false;
-                        if (p.peak_mode == .ellipsis) {
+                        if (p.peak_mode == .ellipsis or p.peak_mode == .ellipsis2) {
                             const prev_idx: usize = if (idx == 0) ANG - 1 else idx - 1;
                             const next_idx: usize = if (idx + 1 >= ANG) 0 else idx + 1;
                             const onCurve = struct {
@@ -877,12 +905,15 @@ pub const Renderer = struct {
                                 }
                             }.f;
                             const r_base = r0 + ring_min;
+                            const arr_low = if (p.peak_mode == .ellipsis2) &self.ell2_low else &self.path_low;
+                            const arr_mid = if (p.peak_mode == .ellipsis2) &self.ell2_mid else &self.path_mid;
+                            const arr_high = if (p.peak_mode == .ellipsis2) &self.ell2_high else &self.path_high;
                             // Outlines only (no fill, no smoothed bands), priority: low > mid > high
-                            if (onCurve(&self.path_low, idx, prev_idx, next_idx, r_base, ring_h, path_w, rho)) {
+                            if (onCurve(arr_low, idx, prev_idx, next_idx, r_base, ring_h, path_w, rho)) {
                                 hit_layer = 3;
-                            } else if (onCurve(&self.path_mid, idx, prev_idx, next_idx, r_base, ring_h, path_w, rho)) {
+                            } else if (onCurve(arr_mid, idx, prev_idx, next_idx, r_base, ring_h, path_w, rho)) {
                                 hit_layer = 2;
-                            } else if (onCurve(&self.path_high, idx, prev_idx, next_idx, r_base, ring_h, path_w, rho)) {
+                            } else if (onCurve(arr_high, idx, prev_idx, next_idx, r_base, ring_h, path_w, rho)) {
                                 hit_layer = 1;
                             }
                         } else if (p.peak_mode == .path) {
@@ -1030,7 +1061,7 @@ pub const Renderer = struct {
                 " s / r   shuffle / repeat",
                 " [ / ]   spin ∓5 RPM ({/} ∓1)",
                 " v / 0   preset RPM / reset",
-                " w       path / ellipsis / peak",
+                " w       path/ellip/ellip2/peak",
                 " t / k   viz 1:1/smooth / colori",
                 " g       bagliore cassa on/off",
                 " a       aurora sub-bass on/off",
