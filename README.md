@@ -133,7 +133,7 @@ Tutti gli argomenti non riconosciuti da `vinyl` vengono inoltrati direttamente a
 | `3` / `4` | Diminuisce / aumenta l'intensità dell'**aurora sub-bassi** (`20%`–`300%`, step ±20%) |
 | `5` / `6` | Diminuisce / aumenta la quantità di puntini/stelline scintillanti su piatti e tintinnii (9.5–16 kHz; `0` = off, fino a `10`, default `3`) |
 | `7` / `8` | Diminuisce / aumenta la quantità di filamenti ondulati sui suoni medi sostenuti (pianoforte, trombe, sax; `0` = off, fino a `10`, default `4`) |
-| `9` | Attiva/disattiva i **cerchi concentrici** (colore `freq`, default off) che si espandono dal bordo del disco sui colpi di cassa (100–300 Hz) |
+| `9` | Cicla i **cerchi concentrici** (colore `freq`): `off` *(default)* → `kick` *(colpi di cassa 100–300 Hz)* → `mid` *(medi sostenuti 300 Hz – 2.2 kHz)* |
 | `c` | Alterna il colore del **bagliore cassa** tra quello derivato dalla copertina (`cover`) e quello coerente con la frequenza predominante (tra `rebeccapurple` e `teal`); l'**aurora** mantiene sempre la tonalità `rebeccapurple` |
 | `d` | Cicla la risoluzione massima del disco Kitty: `512px` *(default)* → `768px` (ultra) → `384px` (veloce) |
 | `x` | Attiva/disattiva l'antialiasing del disco (bordo circolare + filtro bilineare vs nearest-neighbor) |

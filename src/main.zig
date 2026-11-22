@@ -208,7 +208,7 @@ pub fn main() !void {
     var aurora = true;
     var star_level: u8 = 3;
     var wave_level: u8 = 4;
-    var kick_rings = false;
+    var ring_mode: render.RingMode = .off;
     var glow_gain: f32 = 1.0;
     var aurora_gain: f32 = 1.0;
     var fx_color: render.FxColorMode = .cover;
@@ -370,8 +370,16 @@ pub fn main() !void {
                     hud_timer = 2.0;
                 },
                 '9' => {
-                    kick_rings = !kick_rings;
-                    hud_msg = if (kick_rings) " kick rings on " else " kick rings off ";
+                    ring_mode = switch (ring_mode) {
+                        .off => .kick,
+                        .kick => .mid,
+                        .mid => .off,
+                    };
+                    hud_msg = switch (ring_mode) {
+                        .off => " rings: off ",
+                        .kick => " rings: kick ",
+                        .mid => " rings: mid ",
+                    };
                     hud_timer = 2.0;
                 },
                 '1' => {
@@ -607,7 +615,7 @@ pub fn main() !void {
             .aurora = aurora,
             .star_level = star_level,
             .wave_level = wave_level,
-            .kick_rings = kick_rings,
+            .ring_mode = ring_mode,
             .glow_gain = glow_gain,
             .aurora_gain = aurora_gain,
             .fx_color = fx_color,

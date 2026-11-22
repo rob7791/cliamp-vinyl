@@ -139,6 +139,7 @@ pub const PeakMode = enum { ellipsis, ellipsis2, path, peak };
 pub const VizMotion = enum { raw, smooth };
 pub const VizColor = enum { freq, cover };
 pub const FxColorMode = enum { cover, spectrum };
+pub const RingMode = enum { off, kick, mid };
 pub const InfoMode = enum { auto, show, hide };
 pub const DiscStyle = enum {
     cover,
@@ -202,7 +203,7 @@ pub const Params = struct {
     aurora: bool = true,
     star_level: u8 = 3,
     wave_level: u8 = 4,
-    kick_rings: bool = false,
+    ring_mode: RingMode = .off,
     glow_gain: f32 = 1.0,
     aurora_gain: f32 = 1.0,
     fx_color: FxColorMode = .cover,
@@ -254,6 +255,7 @@ pub const Renderer = struct {
     fil_accum: f32 = 0,
     filaments: [MAX_FILAMENTS]Filament = [_]Filament{.{}} ** MAX_FILAMENTS,
     kick_ring_cd: f32 = 0,
+    mid_ring_accum: f32 = 0,
     kick_rings_pool: [MAX_KICK_RINGS]KickRing = [_]KickRing{.{}} ** MAX_KICK_RINGS,
     tex_size_for: usize = 0,
     img_gen: u64 = 0,
@@ -470,14 +472,14 @@ pub const Renderer = struct {
         }
         self.kick_glow = std.math.clamp(self.kick_glow, 0, 1.0);
 
-        // Kick-triggered expanding concentric rings (same 100–300 Hz kick detector as glow)
+        // Expanding concentric rings pool (driven by kick 100-300Hz OR sustained mids 300Hz-2.2kHz)
         if (self.kick_ring_cd > 0) self.kick_ring_cd = @max(0.0, self.kick_ring_cd - p.dt);
         for (&self.kick_rings_pool) |*kr| {
             if (!kr.active) continue;
             kr.age += p.dt;
             if (kr.age >= kr.max_life) kr.active = false;
         }
-        if (p.kick_rings and punch > 0.24 and flux > 0.055 and self.kick_ring_cd <= 0) {
+        if (p.ring_mode == .kick and punch > 0.24 and flux > 0.055 and self.kick_ring_cd <= 0) {
             for (&self.kick_rings_pool) |*kr| {
                 if (!kr.active) {
                     kr.* = .{
@@ -526,11 +528,32 @@ pub const Renderer = struct {
         const sus_l: f32 = if (sus_cnt > 0) std.math.clamp(sus_l_sum / sus_cnt, 0, 1) else 0;
         const sus_r: f32 = if (sus_cnt > 0) std.math.clamp(sus_r_sum / sus_cnt, 0, 1) else 0;
         const sus_e: f32 = 0.5 * (sus_l + sus_r);
-        const sus_pitch: f32 = if (sus_u_den > 1e-4)
-            std.math.clamp(((sus_u_num / sus_u_den) - 0.40) / 0.32, 0.0, 1.0)
-        else
-            0.5;
+        const sus_dom_u: f32 = if (sus_u_den > 1e-4) sus_u_num / sus_u_den else 0.52;
+        const sus_pitch: f32 = std.math.clamp((sus_dom_u - 0.40) / 0.32, 0.0, 1.0);
         self.updateFilaments(p.dt, sus_l, sus_r, sus_e, sus_pitch, p.wave_level);
+
+        // Mid-driven concentric rings (when ring_mode == .mid)
+        if (p.ring_mode == .mid and self.mid_sustain >= 0.04) {
+            const lv_f: f32 = @floatFromInt(@max(@as(u8, 1), p.wave_level));
+            self.mid_ring_accum += p.dt * @max(0.25, self.mid_sustain) * (1.2 + lv_f * 0.65);
+            if (self.mid_ring_accum >= 1.0) {
+                self.mid_ring_accum -= 1.0;
+                for (&self.kick_rings_pool) |*kr| {
+                    if (!kr.active) {
+                        kr.* = .{
+                            .age = 0,
+                            .max_life = 1.45,
+                            .strength = std.math.clamp(0.45 + self.mid_sustain * 0.85, 0.4, 1.0),
+                            .dom_u = sus_dom_u,
+                            .active = true,
+                        };
+                        break;
+                    }
+                }
+            }
+        } else {
+            self.mid_ring_accum = 0;
+        }
 
         for (0..ANG) |a| {
             const th = (@as(f32, @floatFromInt(a)) + 0.5) / ANG * TAU;
@@ -651,7 +674,7 @@ pub const Renderer = struct {
             if (p.wave_level > 0) {
                 self.drawFilaments(s, cx, cy, r0 + ring_min, k, s.rows, pal.c1, pal.c2, p.fx_color, p.wave_level);
             }
-            if (p.kick_rings) {
+            if (p.ring_mode != .off) {
                 self.drawKickRings(s, cx, cy, rd, r0 + ring_min, k, s.rows, pal.c1, pal.c2, p.fx_color, p.glow_gain);
             }
             if (p.star_level > 0) {
@@ -1792,7 +1815,7 @@ pub const Renderer = struct {
                 " 1/2 3/4 intensità glow / aurora",
                 " 5 / 6   quantità stelline (0..10)",
                 " 7 / 8   filamenti medi (0..10)",
-                " 9       cerchi cassa on/off",
+                " 9       cerchi kick / mid / off",
                 " c       colori fx cover/freq",
                 " d / x   risoluzione / AA disco",
                 " o       stile cover/vinyl/v.art/CD",
