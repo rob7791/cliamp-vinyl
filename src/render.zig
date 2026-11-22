@@ -11,6 +11,15 @@ const ANG = 1440;
 const TAU: f32 = std.math.tau;
 const MAX_STARS = 240;
 const MAX_FILAMENTS = 24;
+const MAX_KICK_RINGS = 12;
+
+const KickRing = struct {
+    age: f32 = 0,
+    max_life: f32 = 1.15,
+    strength: f32 = 0,
+    dom_u: f32 = 0.34,
+    active: bool = false,
+};
 
 const Filament = struct {
     x0: f32 = 0.5, // horizontal center in [0.14, 0.86]
@@ -130,7 +139,6 @@ pub const PeakMode = enum { ellipsis, ellipsis2, path, peak };
 pub const VizMotion = enum { raw, smooth };
 pub const VizColor = enum { freq, cover };
 pub const FxColorMode = enum { cover, spectrum };
-pub const WaveStyle = enum { filaments, rings };
 pub const InfoMode = enum { auto, show, hide };
 pub const DiscStyle = enum {
     cover,
@@ -194,7 +202,7 @@ pub const Params = struct {
     aurora: bool = true,
     star_level: u8 = 3,
     wave_level: u8 = 4,
-    wave_style: WaveStyle = .filaments,
+    kick_rings: bool = true,
     glow_gain: f32 = 1.0,
     aurora_gain: f32 = 1.0,
     fx_color: FxColorMode = .cover,
@@ -245,6 +253,8 @@ pub const Renderer = struct {
     mid_sustain: f32 = 0,
     fil_accum: f32 = 0,
     filaments: [MAX_FILAMENTS]Filament = [_]Filament{.{}} ** MAX_FILAMENTS,
+    kick_ring_cd: f32 = 0,
+    kick_rings_pool: [MAX_KICK_RINGS]KickRing = [_]KickRing{.{}} ** MAX_KICK_RINGS,
     tex_size_for: usize = 0,
     img_gen: u64 = 0,
 
@@ -460,6 +470,29 @@ pub const Renderer = struct {
         }
         self.kick_glow = std.math.clamp(self.kick_glow, 0, 1.0);
 
+        // Kick-triggered expanding concentric rings (same 100–300 Hz kick detector as glow)
+        if (self.kick_ring_cd > 0) self.kick_ring_cd = @max(0.0, self.kick_ring_cd - p.dt);
+        for (&self.kick_rings_pool) |*kr| {
+            if (!kr.active) continue;
+            kr.age += p.dt;
+            if (kr.age >= kr.max_life) kr.active = false;
+        }
+        if (p.kick_rings and punch > 0.24 and flux > 0.055 and self.kick_ring_cd <= 0) {
+            for (&self.kick_rings_pool) |*kr| {
+                if (!kr.active) {
+                    kr.* = .{
+                        .age = 0,
+                        .max_life = 1.15,
+                        .strength = std.math.clamp(0.45 + punch * 0.65, 0.4, 1.0),
+                        .dom_u = self.kick_dom_u,
+                        .active = true,
+                    };
+                    self.kick_ring_cd = 0.14;
+                    break;
+                }
+            }
+        }
+
         // Sub-bass storm aurora envelope (20–80 Hz, per-channel L/R rumble)
         const sl_raw: f32 = if (sub_cnt > 0) std.math.clamp(sub_l_sum / sub_cnt, 0, 1) else 0;
         const sr_raw: f32 = if (sub_cnt > 0) std.math.clamp(sub_r_sum / sub_cnt, 0, 1) else 0;
@@ -616,7 +649,10 @@ pub const Renderer = struct {
                 self.drawAurora(s, s.rows, p.fx_color, p.aurora_gain);
             }
             if (p.wave_level > 0) {
-                self.drawFilaments(s, cx, cy, rd, r0 + ring_min, k, s.rows, pal.c1, pal.c2, p.fx_color, p.wave_level, p.wave_style);
+                self.drawFilaments(s, cx, cy, r0 + ring_min, k, s.rows, pal.c1, pal.c2, p.fx_color, p.wave_level);
+            }
+            if (p.kick_rings) {
+                self.drawKickRings(s, cx, cy, rd, r0 + ring_min, k, s.rows, pal.c1, pal.c2, p.fx_color, p.glow_gain);
             }
             if (p.star_level > 0) {
                 self.drawStars(s, cx, cy, r0 + ring_min, k, pal.c2, p.viz_color);
@@ -1276,8 +1312,95 @@ pub const Renderer = struct {
         }
     }
 
-    /// Renders thin, crisp, low-opacity translucent Braille mid-range waves (rising filaments or expanding concentric rings).
-    fn drawFilaments(self: *const Renderer, s: *Screen, cx: f32, cy: f32, rd: f32, excl_r: f32, k: f32, vis_rows: usize, c1: [3]f32, c2: [3]f32, fx_color: FxColorMode, level: u8, wave_style: WaveStyle) void {
+    /// Renders subtle expanding concentric Braille shockwave rings triggered by 100–300 Hz kick drum hits.
+    fn drawKickRings(self: *const Renderer, s: *Screen, cx: f32, cy: f32, rd: f32, excl_r: f32, k: f32, vis_rows: usize, c1: [3]f32, c2: [3]f32, fx_color: FxColorMode, glow_gain: f32) void {
+        if (s.cols < 8 or vis_rows < 4) return;
+        var any = false;
+        for (self.kick_rings_pool) |kr| {
+            if (kr.active) {
+                any = true;
+                break;
+            }
+        }
+        if (!any) return;
+
+        const cover_col = mix3(mix3(c1, c2, 0.35), .{ 245, 240, 230 }, 0.25);
+        const dot_bits = [4][2]u8{ .{ 0x01, 0x08 }, .{ 0x02, 0x10 }, .{ 0x04, 0x20 }, .{ 0x40, 0x80 } };
+        const excl_r2 = (excl_r + 1.0) * (excl_r + 1.0);
+        const g = std.math.clamp(glow_gain, 0.2, 3.0);
+        const base_alpha = std.math.clamp(0.095 * (0.7 + 0.3 * g), 0.05, 0.16);
+        const halo_gain = base_alpha * 0.15;
+        const max_expand = @max(cx, cy) * 1.18;
+        const ring_half_w = k * 0.16;
+
+        for (0..vis_rows) |r| {
+            const cell_y0 = @as(f32, @floatFromInt(r));
+            const ddy_m = (cell_y0 + 0.5) * k - cy;
+            const ddy_m2 = ddy_m * ddy_m;
+            for (0..s.cols) |c| {
+                const cell_x0 = @as(f32, @floatFromInt(c));
+                const ddx_m = cell_x0 + 0.5 - cx;
+                const d2_m = ddx_m * ddx_m + ddy_m2;
+                if (d2_m < excl_r2) continue;
+                const cell = s.at(c, r);
+                if (cell.cp != ' ') continue;
+
+                const rho_m = @sqrt(d2_m);
+                var bits: u8 = 0;
+                var max_a: f32 = 0;
+                var halo_a: f32 = 0;
+                var ring_col = cover_col;
+
+                for (self.kick_rings_pool) |kr| {
+                    if (!kr.active) continue;
+                    const prog = std.math.clamp(kr.age / kr.max_life, 0.0, 1.0);
+                    const r_ring = rd + prog * max_expand;
+                    if (@abs(rho_m - r_ring) > 4.2) continue;
+
+                    const fade_in = smoothstep(0.0, 0.10, prog);
+                    const fade_out = smoothstep(1.0, 0.22, prog);
+                    const life_a = fade_in * fade_out;
+                    if (life_a <= 0.01) continue;
+
+                    const d_halo = @abs(rho_m - r_ring);
+                    if (d_halo < 3.5) {
+                        halo_a += kr.strength * life_a * @exp(-(d_halo * d_halo) / 3.2);
+                    }
+                    if (d_halo > k + 1.5) continue;
+
+                    for (0..4) |j| {
+                        const dy = (cell_y0 + 0.125 + 0.25 * @as(f32, @floatFromInt(j))) * k - cy;
+                        const dy2 = dy * dy;
+                        for (0..2) |i| {
+                            const dx = cell_x0 + 0.25 + 0.5 * @as(f32, @floatFromInt(i)) - cx;
+                            const rho = @sqrt(dx * dx + dy2);
+                            if (@abs(rho - r_ring) <= ring_half_w) {
+                                bits |= dot_bits[j][i];
+                                const a = kr.strength * life_a;
+                                if (a > max_a) {
+                                    max_a = a;
+                                    if (fx_color == .spectrum) ring_col = pathBandColor(kr.dom_u);
+                                }
+                            }
+                        }
+                    }
+                }
+                if (halo_a > 0.02) {
+                    const h_amt = std.math.clamp(halo_a * halo_gain, 0.0, 0.03);
+                    const bg = toRgb(mix3(toF(cell.bg), ring_col, h_amt));
+                    cell.bg = bg;
+                    cell.fg = bg;
+                }
+                if (bits == 0 or max_a <= 0.02) continue;
+                const alpha = std.math.clamp(max_a * base_alpha, 0.0, 0.16);
+                cell.cp = 0x2800 + @as(u21, bits);
+                cell.fg = toRgb(mix3(toF(cell.bg), ring_col, alpha));
+            }
+        }
+    }
+
+    /// Renders thin, crisp, low-opacity translucent Braille wave filaments elongating upward from bottom then fading out.
+    fn drawFilaments(self: *const Renderer, s: *Screen, cx: f32, cy: f32, excl_r: f32, k: f32, vis_rows: usize, c1: [3]f32, c2: [3]f32, fx_color: FxColorMode, level: u8) void {
         if (s.cols < 8 or vis_rows < 4 or level == 0) return;
         var any = false;
         for (self.filaments) |f| {
@@ -1302,72 +1425,6 @@ pub const Renderer = struct {
         // Very subtle low-opacity core + even fainter soft halo around it
         const base_alpha = std.math.clamp(0.055 + @as(f32, @floatFromInt(level)) * 0.0085, 0.05, 0.14);
         const halo_gain = base_alpha * 0.15;
-
-        if (wave_style == .rings) {
-            const max_expand = @max(cx, cy) * 1.18;
-            const ring_half_w = k * 0.16;
-            for (0..vis_rows) |r| {
-                const cell_y0 = @as(f32, @floatFromInt(r));
-                const ddy_m = (cell_y0 + 0.5) * k - cy;
-                const ddy_m2 = ddy_m * ddy_m;
-                for (0..s.cols) |c| {
-                    const cell_x0 = @as(f32, @floatFromInt(c));
-                    const ddx_m = cell_x0 + 0.5 - cx;
-                    const d2_m = ddx_m * ddx_m + ddy_m2;
-                    if (d2_m < excl_r2) continue;
-                    const cell = s.at(c, r);
-                    if (cell.cp != ' ') continue;
-
-                    const rho_m = @sqrt(d2_m);
-                    var bits: u8 = 0;
-                    var max_a: f32 = 0;
-                    var halo_a: f32 = 0;
-
-                    for (self.filaments) |f| {
-                        if (!f.active) continue;
-                        const prog = std.math.clamp(f.age / f.max_life, 0.0, 1.0);
-                        const r_ring = rd + prog * max_expand;
-                        if (@abs(rho_m - r_ring) > 4.2) continue;
-
-                        const fade_in = smoothstep(0.0, 0.14, prog);
-                        const fade_out = smoothstep(1.0, 0.22, prog);
-                        const life_a = fade_in * fade_out;
-                        if (life_a <= 0.01) continue;
-
-                        const d_halo = @abs(rho_m - r_ring);
-                        if (d_halo < 3.5) {
-                            halo_a += f.strength * life_a * @exp(-(d_halo * d_halo) / 3.2);
-                        }
-                        if (d_halo > k + 1.5) continue;
-
-                        for (0..4) |j| {
-                            const dy = (cell_y0 + 0.125 + 0.25 * @as(f32, @floatFromInt(j))) * k - cy;
-                            const dy2 = dy * dy;
-                            for (0..2) |i| {
-                                const dx = cell_x0 + 0.25 + 0.5 * @as(f32, @floatFromInt(i)) - cx;
-                                const rho = @sqrt(dx * dx + dy2);
-                                if (@abs(rho - r_ring) <= ring_half_w) {
-                                    bits |= dot_bits[j][i];
-                                    const a = f.strength * life_a;
-                                    if (a > max_a) max_a = a;
-                                }
-                            }
-                        }
-                    }
-                    if (halo_a > 0.02) {
-                        const h_amt = std.math.clamp(halo_a * halo_gain, 0.0, 0.03);
-                        const bg = toRgb(mix3(toF(cell.bg), fil_col, h_amt));
-                        cell.bg = bg;
-                        cell.fg = bg;
-                    }
-                    if (bits == 0 or max_a <= 0.02) continue;
-                    const alpha = std.math.clamp(max_a * base_alpha, 0.0, 0.15);
-                    cell.cp = 0x2800 + @as(u21, bits);
-                    cell.fg = toRgb(mix3(toF(cell.bg), fil_col, alpha));
-                }
-            }
-            return;
-        }
 
         for (0..vis_rows) |r| {
             const cell_y0 = @as(f32, @floatFromInt(r));
@@ -1731,7 +1788,7 @@ pub const Renderer = struct {
                 " 1/2 3/4 intensità glow / aurora",
                 " 5 / 6   quantità stelline (0..10)",
                 " 7 / 8   filamenti medi (0..10)",
-                " 9       onde filamenti / cerchi",
+                " 9       cerchi cassa on/off",
                 " c       colori fx cover/freq",
                 " d / x   risoluzione / AA disco",
                 " o       stile cover/vinyl/v.art/CD",

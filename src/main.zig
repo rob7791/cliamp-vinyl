@@ -208,7 +208,7 @@ pub fn main() !void {
     var aurora = true;
     var star_level: u8 = 3;
     var wave_level: u8 = 4;
-    var wave_style: render.WaveStyle = .filaments;
+    var kick_rings = true;
     var glow_gain: f32 = 1.0;
     var aurora_gain: f32 = 1.0;
     var fx_color: render.FxColorMode = .cover;
@@ -370,8 +370,8 @@ pub fn main() !void {
                     hud_timer = 2.0;
                 },
                 '9' => {
-                    wave_style = if (wave_style == .filaments) .rings else .filaments;
-                    hud_msg = if (wave_style == .rings) " waves: rings " else " waves: filaments ";
+                    kick_rings = !kick_rings;
+                    hud_msg = if (kick_rings) " kick rings on " else " kick rings off ";
                     hud_timer = 2.0;
                 },
                 '1' => {
@@ -607,7 +607,7 @@ pub fn main() !void {
             .aurora = aurora,
             .star_level = star_level,
             .wave_level = wave_level,
-            .wave_style = wave_style,
+            .kick_rings = kick_rings,
             .glow_gain = glow_gain,
             .aurora_gain = aurora_gain,
             .fx_color = fx_color,
