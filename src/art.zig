@@ -34,6 +34,8 @@ pub const Loader = struct {
     tried_urls: [3]u64 = .{ 0, 0, 0 },
     has_art: bool = false,
     tried_local: bool = false,
+    retry_count: u8 = 0,
+    next_retry_ns: i128 = 0,
     tried_bpm: bool = false,
     bridge_mtime: i128 = 0,
     bridge_path_hash: u64 = 0,
@@ -87,21 +89,42 @@ pub const Loader = struct {
         }
     }
 
+    fn trackKey(snap: *const cliamp.Snapshot) u64 {
+        var h = std.hash.Wyhash.init(0);
+        h.update(snap.path.get());
+        h.update("\x00");
+        h.update(snap.title.get());
+        return h.final();
+    }
+
+    fn isCurrentKey(self: *Loader, key: u64) bool {
+        const cur = self.client.get();
+        if (!cur.connected) return false;
+        return trackKey(&cur) == key;
+    }
+
+    fn publishIfCurrent(self: *Loader, key: u64, img: *Image) bool {
+        if (!self.isCurrentKey(key)) {
+            img.destroy(self.alloc);
+            return false;
+        }
+        self.publish(img);
+        return true;
+    }
+
     fn step(self: *Loader) !void {
         const snap = self.client.get();
         if (!snap.connected) return;
         if (snap.path.len == 0 and snap.title.len == 0) return;
 
-        var h = std.hash.Wyhash.init(0);
-        h.update(snap.path.get());
-        h.update("\x00");
-        h.update(snap.title.get());
-        const key = h.final();
+        const key = trackKey(&snap);
         if (key != self.track_key) {
             self.track_key = key;
             self.tried_urls = .{ 0, 0, 0 };
             self.has_art = false;
             self.tried_local = false;
+            self.retry_count = 0;
+            self.next_retry_ns = 0;
             self.tried_bpm = false;
             self.setBpm(snap.bpm);
         }
@@ -112,7 +135,7 @@ pub const Loader = struct {
                 self.setBpm(snap.bpm);
             } else {
                 const resolved = self.resolveBpm(snap.path.get());
-                self.setBpm(resolved);
+                if (self.isCurrentKey(key)) self.setBpm(resolved);
             }
         }
 
@@ -137,31 +160,35 @@ pub const Loader = struct {
             }
             self.tried_urls[idx] = uh;
             if (self.loadUrl(url)) |img| {
-                self.has_art = true;
-                self.publish(img);
+                if (self.publishIfCurrent(key, img)) self.has_art = true;
                 return;
             } else |_| {}
         }
-        if (self.has_art or self.tried_local) return;
+        if (self.has_art) return;
+        if (self.tried_local) {
+            if (self.retry_count >= 2 or std.time.nanoTimestamp() < self.next_retry_ns) return;
+            self.retry_count += 1;
+            self.tried_urls = .{ 0, 0, 0 };
+        }
         self.tried_local = true;
 
         // 3) Embedded art / sidecar image for local files, 4) Spotify oEmbed, 5) MPRIS artUrl.
         if (self.loadLocal(snap.path.get())) |img| {
-            self.has_art = true;
-            self.publish(img);
+            if (self.publishIfCurrent(key, img)) self.has_art = true;
             return;
         } else |_| {}
         if (self.loadSpotify(snap.path.get())) |img| {
-            self.has_art = true;
-            self.publish(img);
+            if (self.publishIfCurrent(key, img)) self.has_art = true;
             return;
         } else |_| {}
-        if (self.loadMpris()) |img| {
-            self.has_art = true;
-            self.publish(img);
+        if (self.loadMpris(snap.path.get())) |img| {
+            if (self.publishIfCurrent(key, img)) self.has_art = true;
             return;
         } else |_| {}
-        self.publish(try placeholder(self.alloc, key));
+        self.next_retry_ns = std.time.nanoTimestamp() + 2 * std.time.ns_per_s;
+        if (self.retry_count == 0) {
+            _ = self.publishIfCurrent(key, try placeholder(self.alloc, key));
+        }
     }
 
     fn refreshBridge(self: *Loader) void {
@@ -207,16 +234,47 @@ pub const Loader = struct {
             var pb: [128]u8 = undefined;
             const tmp = try self.tmpPath(&pb);
             defer std.fs.cwd().deleteFile(tmp) catch {};
-            const r = try std.process.Child.run(.{
-                .allocator = self.alloc,
-                .argv = &.{ "curl", "-sfL", "--max-time", "15", "-o", tmp, url },
-            });
-            self.alloc.free(r.stdout);
-            self.alloc.free(r.stderr);
-            if (r.term != .Exited or r.term.Exited != 0) return error.DownloadFailed;
+            if (!self.curlToFile(url, tmp)) return error.DownloadFailed;
             return self.decode(tmp);
         }
         return self.decode(url);
+    }
+
+    /// Downloads `url` to `dest`, retrying with IPv4 (`-4`) if the default attempt fails
+    /// (fixes intermittent IPv6 connection refused on Spotify CDN).
+    fn curlToFile(self: *Loader, url: []const u8, dest: []const u8) bool {
+        const attempts = [_][]const []const u8{
+            &.{ "curl", "-4", "-sfL", "--max-time", "12", "-o", dest, url },
+            &.{ "curl", "-sfL", "--max-time", "12", "-o", dest, url },
+        };
+        for (attempts) |argv| {
+            const r = std.process.Child.run(.{
+                .allocator = self.alloc,
+                .argv = argv,
+            }) catch continue;
+            self.alloc.free(r.stdout);
+            self.alloc.free(r.stderr);
+            if (r.term == .Exited and r.term.Exited == 0) return true;
+        }
+        return false;
+    }
+
+    fn curlGet(self: *Loader, url: []const u8, max_bytes: usize) ![]u8 {
+        const attempts = [_][]const []const u8{
+            &.{ "curl", "-4", "-sfL", "--max-time", "10", url },
+            &.{ "curl", "-sfL", "--max-time", "10", url },
+        };
+        for (attempts) |argv| {
+            const r = std.process.Child.run(.{
+                .allocator = self.alloc,
+                .argv = argv,
+                .max_output_bytes = max_bytes,
+            }) catch continue;
+            self.alloc.free(r.stderr);
+            if (r.term == .Exited and r.term.Exited == 0) return r.stdout;
+            self.alloc.free(r.stdout);
+        }
+        return error.DownloadFailed;
     }
 
     fn loadLocal(self: *Loader, path_in: []const u8) !*Image {
@@ -243,19 +301,14 @@ pub const Loader = struct {
         const id = extractSpotifyTrackId(path_in) orelse return error.NotSpotify;
         var obuf: [256]u8 = undefined;
         const oembed_url = try std.fmt.bufPrint(&obuf, "https://open.spotify.com/oembed?url=https://open.spotify.com/track/{s}", .{id});
-        const r = try std.process.Child.run(.{
-            .allocator = self.alloc,
-            .argv = &.{ "curl", "-sfL", "--max-time", "10", oembed_url },
-            .max_output_bytes = 128 * 1024,
-        });
-        defer self.alloc.free(r.stdout);
-        defer self.alloc.free(r.stderr);
-        if (r.term != .Exited or r.term.Exited != 0) return error.DownloadFailed;
+        const body = try self.curlGet(oembed_url, 128 * 1024);
+        defer self.alloc.free(body);
 
         var ubuf: [1024]u8 = undefined;
-        const thumb = parseSpotifyOembedThumb(self.alloc, r.stdout, &ubuf) orelse return error.NotFound;
+        const thumb = parseSpotifyOembedThumb(self.alloc, body, &ubuf) orelse return error.NotFound;
 
-        // Upgrade Spotify 300x300 CDN prefix (ab67616d00001e02) to 640x640 (ab67616d0000b273) when available
+        // Upgrade Spotify 300x300 CDN prefix (ab67616d00001e02) to 640x640 (ab67616d0000b273)
+        // and also fall back to i.scdn.co/image/<hash> mirror if spotifycdn.com fails.
         const lo_prefix = "ab67616d00001e02";
         const hi_prefix = "ab67616d0000b273";
         if (std.mem.indexOf(u8, thumb, lo_prefix)) |idx| {
@@ -263,11 +316,14 @@ pub const Loader = struct {
             if (std.fmt.bufPrint(&hbuf, "{s}{s}{s}", .{ thumb[0..idx], hi_prefix, thumb[idx + lo_prefix.len ..] })) |hi_url| {
                 if (self.loadUrl(hi_url)) |img| return img else |_| {}
             } else |_| {}
+            if (std.fmt.bufPrint(&hbuf, "https://i.scdn.co/image/{s}{s}", .{ hi_prefix, thumb[idx + lo_prefix.len ..] })) |scdn_url| {
+                if (self.loadUrl(scdn_url)) |img| return img else |_| {}
+            } else |_| {}
         }
         return self.loadUrl(thumb);
     }
 
-    fn loadMpris(self: *Loader) !*Image {
+    fn loadMpris(self: *Loader, expected_path: []const u8) !*Image {
         const r = try std.process.Child.run(.{
             .allocator = self.alloc,
             .argv = &.{
@@ -279,6 +335,16 @@ pub const Loader = struct {
         });
         defer self.alloc.free(r.stdout);
         defer self.alloc.free(r.stderr);
+        // Reject stale MPRIS metadata belonging to a different track
+        if (expected_path.len > 0) {
+            const url_key = "'xesam:url': <'";
+            if (std.mem.indexOf(u8, r.stdout, url_key)) |ui| {
+                const urest = r.stdout[ui + url_key.len ..];
+                if (std.mem.indexOf(u8, urest, "'>")) |uj| {
+                    if (!std.mem.eql(u8, urest[0..uj], expected_path)) return error.StaleMpris;
+                }
+            }
+        }
         const key = "'mpris:artUrl': <'";
         const i = std.mem.indexOf(u8, r.stdout, key) orelse return error.NotFound;
         const rest = r.stdout[i + key.len ..];
