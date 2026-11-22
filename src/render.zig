@@ -702,8 +702,8 @@ pub const Renderer = struct {
                         self.disc_alpha[idx] = @intFromFloat(std.math.clamp(base_a * 255.0 + 0.5, 0, 255));
                     },
                     .cd => {
-                        if (rn < 0.318) {
-                            // Flat clear polycarbonate inner hub with crisp machined edge & single stacking ring
+                        if (rn < 0.258) {
+                            // Flat clear polycarbonate inner hub ending directly at the inner stacking ring
                             self.disc_zone[idx] = 3;
                             var alpha_f: f32 = 0.20;
                             var tone: f32 = 200.0;
@@ -714,18 +714,11 @@ pub const Renderer = struct {
                                 alpha_f = mix1(alpha_f, 0.72, edge);
                                 tone = mix1(tone, 240.0, edge);
                             }
-                            // Single sharp machined CD stacking ring (thin, not wavy)
-                            const d_ring = @abs(rn - 0.255);
-                            if (d_ring < 0.007) {
-                                const step = smoothstep(0.007, 0.002, d_ring);
-                                alpha_f = @max(alpha_f, mix1(0.20, 0.56, step));
-                                tone = if (rn < 0.255) mix1(tone, 242.0, step) else mix1(tone, 155.0, step);
-                            }
-                            // Crisp silver mirror-band collar right before the printed artwork
-                            if (rn > 0.304) {
-                                const collar = smoothstep(0.304, 0.316, rn);
-                                alpha_f = mix1(alpha_f, 0.85, collar);
-                                tone = mix1(tone, 232.0, collar);
+                            // Crisp inner ring right where the printed artwork meets the clear hub
+                            if (rn > 0.246) {
+                                const ring = smoothstep(0.246, 0.256, rn);
+                                alpha_f = mix1(alpha_f, 0.78, ring);
+                                tone = mix1(tone, 236.0, ring);
                             }
                             self.disc_gray[idx] = @intFromFloat(tone);
                             self.disc_alpha[idx] = @intFromFloat(std.math.clamp(base_a * alpha_f * 255.0 + 0.5, 0, 255));
