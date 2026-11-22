@@ -414,11 +414,11 @@ pub const Renderer = struct {
                 sus_u_den += mono;
                 sus_cnt += 1.0;
             }
-            if (u >= 0.52 and u <= 0.77) {
-                // Lead vocals are center-panned (min(L,R) high, |L-R| low)
+            if (u >= 0.38 and u <= 0.77) {
+                // Spoken & sung voice (~250 Hz – 3.5 kHz): center-biased (L ≈ R) with gentle side rejection for stereo reverb
                 const center = @min(raw_l[i], raw_r[i]);
                 const side = @abs(raw_l[i] - raw_r[i]);
-                const vbar = @max(0.0, center - side * 0.65);
+                const vbar = @max(0.0, center - side * 0.30);
                 voc_sum += vbar;
                 voc_u_num += u * vbar;
                 voc_u_den += vbar;
@@ -548,25 +548,25 @@ pub const Renderer = struct {
         const sus_pitch: f32 = std.math.clamp((sus_dom_u - 0.40) / 0.32, 0.0, 1.0);
         self.updateFilaments(p.dt, sus_l, sus_r, sus_e, sus_pitch, p.wave_level);
 
-        // Singing-voice driven concentric rings (center-panned 700 Hz – 3.5 kHz vocal formants)
+        // Singing & spoken voice concentric rings (~250 Hz – 3.5 kHz, center-biased)
         if (self.vocal_ring_cd > 0) self.vocal_ring_cd = @max(0.0, self.vocal_ring_cd - p.dt);
         const voc_e: f32 = if (voc_cnt > 0) std.math.clamp(voc_sum / voc_cnt, 0, 1) else 0;
         const voc_flux: f32 = @max(0.0, voc_e - self.vocal_avg);
-        self.vocal_avg += (voc_e - self.vocal_avg) * @min(1.0, p.dt * 5.0);
-        const voc_dom_u: f32 = if (voc_u_den > 1e-4) voc_u_num / voc_u_den else 0.62;
+        self.vocal_avg += (voc_e - self.vocal_avg) * @min(1.0, p.dt * 6.0);
+        const voc_dom_u: f32 = if (voc_u_den > 1e-4) voc_u_num / voc_u_den else 0.56;
         if (p.ring_mode == .mid and self.vocal_ring_cd <= 0 and
-            ((voc_flux > 0.045 and voc_e > 0.14) or voc_e > 0.34))
+            ((voc_flux > 0.020 and voc_e > 0.055) or voc_e > 0.14))
         {
             for (&self.kick_rings_pool) |*kr| {
                 if (!kr.active) {
                     kr.* = .{
                         .age = 0,
                         .max_life = 1.40,
-                        .strength = std.math.clamp(0.42 + voc_e * 0.65 + voc_flux * 1.4, 0.38, 1.0),
+                        .strength = std.math.clamp(0.45 + voc_e * 0.95 + voc_flux * 2.2, 0.42, 1.0),
                         .dom_u = voc_dom_u,
                         .active = true,
                     };
-                    self.vocal_ring_cd = 0.18;
+                    self.vocal_ring_cd = 0.16;
                     break;
                 }
             }
