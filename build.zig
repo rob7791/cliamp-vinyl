@@ -3,6 +3,7 @@ const std = @import("std");
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.option(std.builtin.OptimizeMode, "optimize", "Optimization mode (default ReleaseFast)") orelse .ReleaseFast;
+    const strip = b.option(bool, "strip", "Strip debug symbols") orelse false;
 
     const exe = b.addExecutable(.{
         .name = "vinyl",
@@ -10,6 +11,7 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/main.zig"),
             .target = target,
             .optimize = optimize,
+            .strip = strip,
             .link_libc = true,
         }),
     });

@@ -1,0 +1,152 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing git tag to build and release (defaults to current ref)'
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            target: x86_64-linux-musl
+          - name: linux-aarch64
+            target: aarch64-linux-musl
+          - name: macos-x86_64
+            target: x86_64-macos
+          - name: macos-aarch64
+            target: aarch64-macos
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Setup Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.1
+
+      - name: Resolve release tag
+        id: meta
+        shell: bash
+        run: |
+          if [ -n "${{ inputs.tag }}" ]; then
+            TAG="${{ inputs.tag }}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Build binary
+        run: |
+          zig build -Dtarget=${{ matrix.target }} -Doptimize=ReleaseFast -Dstrip=true
+
+      - name: Package archive
+        shell: bash
+        run: |
+          TAG="${{ steps.meta.outputs.tag }}"
+          PKG="vinyl-${TAG}-${{ matrix.name }}"
+          mkdir -p "dist/${PKG}/plugins" "dist/${PKG}/scripts"
+          cp zig-out/bin/vinyl "dist/${PKG}/vinyl"
+          chmod +x "dist/${PKG}/vinyl"
+          cp README.md "dist/${PKG}/README.md"
+          cp plugins/vinyl-art-bridge.lua "dist/${PKG}/plugins/vinyl-art-bridge.lua"
+          cp scripts/install-plugin.sh "dist/${PKG}/scripts/install-plugin.sh"
+          chmod +x "dist/${PKG}/scripts/install-plugin.sh"
+          tar -C dist -czf "dist/${PKG}.tar.gz" "${PKG}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.name }}
+          path: dist/*.tar.gz
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Generate SHA256SUMS
+        shell: bash
+        working-directory: artifacts
+        run: |
+          sha256sum *.tar.gz > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          if [ -n "${{ inputs.tag }}" ]; then
+            TAG="${{ inputs.tag }}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+
+          PRERELEASE_FLAG=""
+          if [[ "$TAG" == *-* ]]; then
+            PRERELEASE_FLAG="--prerelease"
+          fi
+
+          cat > /tmp/release-notes.md <<'EOF'
+          ### Prebuilt binaries
+
+          | Platform | Architecture | Archive |
+          | --- | --- | --- |
+          | Linux (static musl) | x86_64 | `vinyl-<tag>-linux-x86_64.tar.gz` |
+          | Linux (static musl) | aarch64 | `vinyl-<tag>-linux-aarch64.tar.gz` |
+          | macOS | x86_64 (Intel) | `vinyl-<tag>-macos-x86_64.tar.gz` |
+          | macOS | aarch64 (Apple Silicon) | `vinyl-<tag>-macos-aarch64.tar.gz` |
+
+          > **Note:** Windows is not supported (requires POSIX/Unix domain sockets, `termios`, and `cava`).
+
+          ### Quick start
+
+          1. Extract the archive and place `vinyl` in your `PATH` (e.g. `~/.local/bin/vinyl`).
+          2. Install runtime dependencies: `cliamp` (`>= v2.3.0`), `cava`, `ffmpeg`, `curl`, and a Kitty-graphics-compatible terminal (Ghostty, Kitty, WezTerm, Konsole).
+          3. Install the `cliamp` artwork bridge plugin:
+             ```bash
+             vinyl --install-plugin
+             ```
+          EOF
+          sed -i "s/<tag>/${TAG}/g" /tmp/release-notes.md
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" artifacts/*.tar.gz artifacts/SHA256SUMS.txt --clobber
+          else
+            gh release create "$TAG" \
+              artifacts/*.tar.gz artifacts/SHA256SUMS.txt \
+              --title "$TAG" \
+              --notes-file /tmp/release-notes.md \
+              --generate-notes \
+              $PRERELEASE_FLAG
+          fi
