@@ -675,7 +675,8 @@ pub const Renderer = struct {
                 self.drawFilaments(s, cx, cy, r0 + ring_min, k, s.rows, pal.c1, pal.c2, p.fx_color, p.wave_level);
             }
             if (p.ring_mode != .off) {
-                self.drawKickRings(s, cx, cy, rd, r0 + ring_min, k, s.rows, pal.c1, pal.c2, p.fx_color, p.glow_gain);
+                const ring_start = r0 + ring_min + ring_h;
+                self.drawKickRings(s, cx, cy, ring_start, ring_start, k, s.rows, pal.c1, pal.c2, p.fx_color, p.glow_gain);
             }
             if (p.star_level > 0) {
                 self.drawStars(s, cx, cy, r0 + ring_min, k, pal.c2, p.viz_color);
@@ -1352,11 +1353,11 @@ pub const Renderer = struct {
         _ = fx_color;
         const default_col = pathBandColor(0.34);
         const dot_bits = [4][2]u8{ .{ 0x01, 0x08 }, .{ 0x02, 0x10 }, .{ 0x04, 0x20 }, .{ 0x40, 0x80 } };
-        const excl_r2 = (excl_r + 1.0) * (excl_r + 1.0);
+        const excl_r2 = @max(0.0, excl_r - 0.5) * @max(0.0, excl_r - 0.5);
         const g = std.math.clamp(glow_gain, 0.2, 3.0);
         const base_alpha = std.math.clamp(0.095 * (0.7 + 0.3 * g), 0.05, 0.16);
         const halo_gain = base_alpha * 0.15;
-        const max_expand = @max(cx, cy) * 1.18;
+        const max_expand = @max(12.0, @max(cx, cy) * 1.25 - rd);
         const ring_half_w = k * 0.16;
 
         for (0..vis_rows) |r| {
