@@ -1014,33 +1014,20 @@ pub const Renderer = struct {
                     const all_e2 = e2_mid_bits | e2_high_bits | e2_low_bits;
                     if (all_e2 == 0) continue;
                     const cell = s.at(c, r);
-                    const n_layers: u8 = @as(u8, @intFromBool(e2_mid_bits != 0)) +
-                        @as(u8, @intFromBool(e2_high_bits != 0)) +
-                        @as(u8, @intFromBool(e2_low_bits != 0));
-                    if (n_layers == 1) {
-                        cell.cp = 0x2800 + @as(u21, all_e2);
-                        cell.fg = if (e2_mid_bits != 0) band_mid_col else if (e2_high_bits != 0) band_high_col else band_low_col;
-                    } else if (all_e2 == 0xFF) {
-                        // Interior boundary between two filled ellipses: fg = top layer, bg = underlying layer
-                        if (e2_mid_bits != 0) {
-                            cell.cp = 0x2800 + @as(u21, e2_mid_bits);
-                            cell.fg = band_mid_col;
-                            cell.bg = if (@popCount(e2_high_bits) >= @popCount(e2_low_bits)) band_high_col else band_low_col;
-                        } else {
-                            cell.cp = 0x2800 + @as(u21, e2_high_bits);
-                            cell.fg = band_high_col;
-                            cell.bg = band_low_col;
-                        }
-                    } else {
-                        // Outer boundary where multiple layers meet empty background: draw top layer's dots cleanly
-                        if (e2_mid_bits != 0) {
-                            cell.cp = 0x2800 + @as(u21, e2_mid_bits);
-                            cell.fg = band_mid_col;
-                        } else {
-                            cell.cp = 0x2800 + @as(u21, e2_high_bits);
-                            cell.fg = band_high_col;
-                        }
-                    }
+                    cell.cp = 0x2800 + @as(u21, all_e2);
+                    // Weighted anti-aliased blend across lit dots, NEVER touching cell.bg (no solid tiles!)
+                    const nm: f32 = @floatFromInt(@popCount(e2_mid_bits));
+                    const nh: f32 = @floatFromInt(@popCount(e2_high_bits));
+                    const nl: f32 = @floatFromInt(@popCount(e2_low_bits));
+                    const inv_n = 1.0 / (nm + nh + nl);
+                    const cm = toF(band_mid_col);
+                    const ch = toF(band_high_col);
+                    const cl = toF(band_low_col);
+                    cell.fg = toRgb(.{
+                        (cm[0] * nm + ch[0] * nh + cl[0] * nl) * inv_n,
+                        (cm[1] * nm + ch[1] * nh + cl[1] * nl) * inv_n,
+                        (cm[2] * nm + ch[2] * nh + cl[2] * nl) * inv_n,
+                    });
                     continue;
                 }
                 if (bits == 0) continue;
