@@ -870,8 +870,12 @@ pub const Renderer = struct {
                 var bits: u8 = 0;
                 var acc = [3]f32{ 0, 0, 0 };
                 var lit: f32 = 0;
-                // Layer priority per cell for ellipsis: 3 = bass (skyblue), 2 = mid (limegreen), 1 = high (crimson), 0 = band
+                // Layer priority per cell for ellipsis: 3 = bass, 2 = mid, 1 = high, 0 = band
                 var cell_layer: u8 = 0;
+                // Per-layer sub-pixel bitmasks for crisp sub-cell boundaries in ellipsis2
+                var e2_mid_bits: u8 = 0;
+                var e2_high_bits: u8 = 0;
+                var e2_low_bits: u8 = 0;
                 var path_acc = [3]f32{ 0, 0, 0 };
                 var path_lit: f32 = 0;
                 for (0..4) |j| {
@@ -906,17 +910,20 @@ pub const Renderer = struct {
                             }.f;
                             const r_base = r0 + ring_min;
                             if (p.peak_mode == .ellipsis2) {
-                                // ellipsis2: all 3 ellipses solidly filled, priority: mid (5) > high (4) > low (3)
+                                // ellipsis2: all 3 ellipses solidly filled, priority: mid > high > low
+                                // Track per-layer dot bitmasks so fg/bg give crisp 2x4 sub-pixel boundaries
                                 const mid_r = r_base + self.ell2_mid[idx] * ring_h;
                                 const high_r = r_base + self.ell2_high[idx] * ring_h;
                                 const low_r = r_base + self.ell2_low[idx] * ring_h;
+                                const bit = dot_bits[j][i];
                                 if (self.ell2_mid[idx] > 0.01 and rho <= mid_r + path_w) {
-                                    hit_layer = 5;
+                                    e2_mid_bits |= bit;
                                 } else if (self.ell2_high[idx] > 0.01 and rho <= high_r + path_w) {
-                                    hit_layer = 4;
+                                    e2_high_bits |= bit;
                                 } else if (self.ell2_low[idx] > 0.01 and rho <= low_r + path_w) {
-                                    hit_layer = 3;
+                                    e2_low_bits |= bit;
                                 }
+                                continue;
                             } else {
                                 // ellipsis: outlines only, priority low > mid > high
                                 if (onCurve(&self.path_low, idx, prev_idx, next_idx, r_base, ring_h, path_w, rho)) {
@@ -1003,15 +1010,48 @@ pub const Renderer = struct {
                         lit += 1;
                     }
                 }
+                if (p.peak_mode == .ellipsis2) {
+                    const all_e2 = e2_mid_bits | e2_high_bits | e2_low_bits;
+                    if (all_e2 == 0) continue;
+                    const cell = s.at(c, r);
+                    const n_layers: u8 = @as(u8, @intFromBool(e2_mid_bits != 0)) +
+                        @as(u8, @intFromBool(e2_high_bits != 0)) +
+                        @as(u8, @intFromBool(e2_low_bits != 0));
+                    if (n_layers == 1) {
+                        cell.cp = 0x2800 + @as(u21, all_e2);
+                        cell.fg = if (e2_mid_bits != 0) band_mid_col else if (e2_high_bits != 0) band_high_col else band_low_col;
+                    } else if (all_e2 == 0xFF) {
+                        // Interior boundary between two filled ellipses: fg = top layer, bg = underlying layer
+                        if (e2_mid_bits != 0) {
+                            cell.cp = 0x2800 + @as(u21, e2_mid_bits);
+                            cell.fg = band_mid_col;
+                            cell.bg = if (@popCount(e2_high_bits) >= @popCount(e2_low_bits)) band_high_col else band_low_col;
+                        } else {
+                            cell.cp = 0x2800 + @as(u21, e2_high_bits);
+                            cell.fg = band_high_col;
+                            cell.bg = band_low_col;
+                        }
+                    } else {
+                        // Outer boundary where multiple layers meet empty background: draw top layer's dots cleanly
+                        if (e2_mid_bits != 0) {
+                            cell.cp = 0x2800 + @as(u21, e2_mid_bits);
+                            cell.fg = band_mid_col;
+                        } else {
+                            cell.cp = 0x2800 + @as(u21, e2_high_bits);
+                            cell.fg = band_high_col;
+                        }
+                    }
+                    continue;
+                }
                 if (bits == 0) continue;
                 const cell = s.at(c, r);
                 cell.cp = 0x2800 + @as(u21, bits);
                 cell.fg = if (path_lit > 0)
                     toRgb(.{ path_acc[0] / path_lit, path_acc[1] / path_lit, path_acc[2] / path_lit })
                 else switch (cell_layer) {
-                    5, 2 => band_mid_col,
-                    4, 1 => band_high_col,
                     3 => band_low_col,
+                    2 => band_mid_col,
+                    1 => band_high_col,
                     else => toRgb(.{ acc[0] / lit, acc[1] / lit, acc[2] / lit }),
                 };
             }
