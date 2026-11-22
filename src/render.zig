@@ -1298,7 +1298,7 @@ pub const Renderer = struct {
         const inv_rows = 1.0 / rows_f;
         const excl_r2 = (excl_r + 1.0) * (excl_r + 1.0);
         // Very subtle low-opacity filament core + even fainter soft halo around it
-        const base_alpha = std.math.clamp(0.11 + @as(f32, @floatFromInt(level)) * 0.017, 0.10, 0.28);
+        const base_alpha = std.math.clamp(0.055 + @as(f32, @floatFromInt(level)) * 0.0085, 0.05, 0.14);
         const halo_gain = base_alpha * 0.15;
 
         for (0..vis_rows) |r| {
@@ -1376,13 +1376,13 @@ pub const Renderer = struct {
                     }
                 }
                 if (halo_a > 0.02) {
-                    const h_amt = std.math.clamp(halo_a * halo_gain, 0.0, 0.06);
+                    const h_amt = std.math.clamp(halo_a * halo_gain, 0.0, 0.03);
                     const bg = toRgb(mix3(toF(cell.bg), fil_col, h_amt));
                     cell.bg = bg;
                     cell.fg = bg;
                 }
                 if (bits == 0 or max_a <= 0.02) continue;
-                const alpha = std.math.clamp(max_a * base_alpha, 0.0, 0.30);
+                const alpha = std.math.clamp(max_a * base_alpha, 0.0, 0.15);
                 cell.cp = 0x2800 + @as(u21, bits);
                 cell.fg = toRgb(mix3(toF(cell.bg), fil_col, alpha));
             }
