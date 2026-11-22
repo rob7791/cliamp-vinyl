@@ -210,6 +210,7 @@ pub fn main() !void {
     var aurora_gain: f32 = 1.0;
     var fx_color: render.FxColorMode = .cover;
     var disc_res: render.DiscRes = .high;
+    var disc_style: render.DiscStyle = .cover;
     var aa = true;
     var info_mode: render.InfoMode = .auto;
     const AutoInfoPhase = enum { hidden, full_hold, full_fadeout, track_fadein, track_hold, track_fadeout };
@@ -376,6 +377,16 @@ pub fn main() !void {
                 'x' => {
                     aa = !aa;
                     hud_msg = if (aa) " AA on " else " AA off ";
+                    hud_timer = 2.0;
+                },
+                'o' => {
+                    disc_style = switch (disc_style) {
+                        .cover => .vinyl,
+                        .vinyl => .vinyl_art,
+                        .vinyl_art => .cd,
+                        .cd => .cover,
+                    };
+                    hud_msg = disc_style.label();
                     hud_timer = 2.0;
                 },
                 'm' => {
@@ -572,6 +583,7 @@ pub fn main() !void {
             .force_redraw = force_redraw,
             .cell_px_w = cell_px_w,
             .disc_res = disc_res,
+            .disc_style = disc_style,
             .aa = aa,
             .info_alpha = info_alpha,
             .info_seekbar = info_seekbar,

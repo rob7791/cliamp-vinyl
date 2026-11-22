@@ -103,6 +103,21 @@ pub const VizMotion = enum { raw, smooth };
 pub const VizColor = enum { freq, cover };
 pub const FxColorMode = enum { cover, spectrum };
 pub const InfoMode = enum { auto, show, hide };
+pub const DiscStyle = enum {
+    cover,
+    vinyl,
+    vinyl_art,
+    cd,
+
+    pub fn label(self: DiscStyle) []const u8 {
+        return switch (self) {
+            .cover => " disc: cover ",
+            .vinyl => " disc: vinyl ",
+            .vinyl_art => " disc: vinyl art ",
+            .cd => " disc: CD ",
+        };
+    }
+};
 pub const DiscRes = enum {
     med,
     high,
@@ -160,6 +175,7 @@ pub const Params = struct {
     force_redraw: bool = false,
     cell_px_w: f32 = 0,
     disc_res: DiscRes = .high,
+    disc_style: DiscStyle = .cover,
     aa: bool = true,
     info_alpha: f32 = 1.0,
     info_seekbar: bool = true,
@@ -204,22 +220,28 @@ pub const Renderer = struct {
     last_img_gen: u64 = 0,
     last_sheen: bool = false,
     last_aa: bool = true,
+    last_style: DiscStyle = .cover,
 
-    // precomputed per-pixel circular mask & static sheen LUT (rebuilt only on geometry/AA change)
+    // precomputed per-pixel circular mask, zone, grooves/plastic & static sheen LUT (rebuilt only on geometry/AA/style change)
     lut_side: usize = 0,
     lut_box_w: f32 = 0,
     lut_box_h: f32 = 0,
     lut_rd: f32 = 0,
     lut_rh: f32 = 0,
     lut_aa: bool = true,
+    lut_style: DiscStyle = .cover,
     disc_alpha: []u8 = &.{},
     disc_sheen: []u8 = &.{},
+    disc_zone: []u8 = &.{}, // 0=empty, 1=art(1x), 2=art(label), 3=static gray/plastic, 4=vinyl label
+    disc_gray: []u8 = &.{},
 
     pub fn deinit(self: *Renderer) void {
         self.tex.deinit(self.alloc);
         self.old_tex.deinit(self.alloc);
         if (self.disc_alpha.len > 0) self.alloc.free(self.disc_alpha);
         if (self.disc_sheen.len > 0) self.alloc.free(self.disc_sheen);
+        if (self.disc_zone.len > 0) self.alloc.free(self.disc_zone);
+        if (self.disc_gray.len > 0) self.alloc.free(self.disc_gray);
         if (self.img) |i| i.destroy(self.alloc);
         if (self.old_img) |i| i.destroy(self.alloc);
     }
@@ -518,7 +540,7 @@ pub const Renderer = struct {
                         self.last_disc_cols != disc_cols or self.last_disc_rows != disc_rows or
                         self.last_side != side or @abs(self.last_aspect - k) > 1e-4 or
                         self.last_img_gen != self.img_gen or self.last_sheen != p.sheen or
-                        self.last_aa != p.aa or
+                        self.last_aa != p.aa or self.last_style != p.disc_style or
                         self.fade < 1.0 or self.last_fade < 1.0 or
                         p.angle != self.last_angle;
                     if (dirty) {
@@ -540,6 +562,7 @@ pub const Renderer = struct {
                             self.last_img_gen = self.img_gen;
                             self.last_sheen = p.sheen;
                             self.last_aa = p.aa;
+                            self.last_style = p.disc_style;
                         }
                     }
                 }
@@ -555,13 +578,14 @@ pub const Renderer = struct {
         self.drawInfo(s, &p, vis_rows, disc_col0, disc_row0, disc_cols, disc_rows, pal.c1, pal.c2, bg);
     }
 
-    fn ensureDiscLut(self: *Renderer, side: usize, box_w: f32, box_h: f32, rd: f32, rh: f32, aa: bool) void {
+    fn ensureDiscLut(self: *Renderer, side: usize, box_w: f32, box_h: f32, rd: f32, rh: f32, aa: bool, style: DiscStyle) void {
         if (self.lut_side == side and
             @abs(self.lut_box_w - box_w) < 1e-4 and
             @abs(self.lut_box_h - box_h) < 1e-4 and
             @abs(self.lut_rd - rd) < 1e-4 and
             @abs(self.lut_rh - rh) < 1e-4 and
             self.lut_aa == aa and
+            self.lut_style == style and
             self.disc_alpha.len == side * side)
         {
             return;
@@ -570,19 +594,18 @@ pub const Renderer = struct {
         if (self.disc_alpha.len != n) {
             if (self.disc_alpha.len > 0) self.alloc.free(self.disc_alpha);
             if (self.disc_sheen.len > 0) self.alloc.free(self.disc_sheen);
-            self.disc_alpha = self.alloc.alloc(u8, n) catch {
-                self.disc_alpha = &.{};
-                self.disc_sheen = &.{};
-                self.lut_side = 0;
-                return;
-            };
-            self.disc_sheen = self.alloc.alloc(u8, n) catch {
-                self.alloc.free(self.disc_alpha);
-                self.disc_alpha = &.{};
-                self.disc_sheen = &.{};
-                self.lut_side = 0;
-                return;
-            };
+            if (self.disc_zone.len > 0) self.alloc.free(self.disc_zone);
+            if (self.disc_gray.len > 0) self.alloc.free(self.disc_gray);
+            self.disc_alpha = &.{};
+            self.disc_sheen = &.{};
+            self.disc_zone = &.{};
+            self.disc_gray = &.{};
+            self.lut_side = 0;
+
+            self.disc_alpha = self.alloc.alloc(u8, n) catch return;
+            self.disc_sheen = self.alloc.alloc(u8, n) catch return;
+            self.disc_zone = self.alloc.alloc(u8, n) catch return;
+            self.disc_gray = self.alloc.alloc(u8, n) catch return;
         }
         self.lut_side = side;
         self.lut_box_w = box_w;
@@ -590,16 +613,18 @@ pub const Renderer = struct {
         self.lut_rd = rd;
         self.lut_rh = rh;
         self.lut_aa = aa;
+        self.lut_style = style;
 
         const inv_rd = 1.0 / rd;
         const inv_side = 1.0 / @as(f32, @floatFromInt(side));
         const px_step = @max(box_w, box_h) * inv_side;
         const aa_half: f32 = if (aa) px_step * 0.5 else 0.0;
+        const hole_r: f32 = if (style == .cd) rd * 0.125 else rh;
         const outer_hi = rd + aa_half;
         const outer_lo = rd - aa_half;
         const outer_hi2 = outer_hi * outer_hi;
-        const inner_lo = @max(0.0, rh - aa_half);
-        const inner_hi = rh + aa_half;
+        const inner_lo = @max(0.0, hole_r - aa_half);
+        const inner_hi = hole_r + aa_half;
         const sheen_cx: f32 = 0.65998315;
         const sheen_sy: f32 = 0.7512804;
 
@@ -614,20 +639,24 @@ pub const Renderer = struct {
                 if (d2 >= outer_hi2) {
                     self.disc_alpha[idx] = 0;
                     self.disc_sheen[idx] = 0;
+                    self.disc_zone[idx] = 0;
+                    self.disc_gray[idx] = 0;
                     continue;
                 }
                 const rho = @sqrt(d2);
                 if (rho <= inner_lo) {
                     self.disc_alpha[idx] = 0;
                     self.disc_sheen[idx] = 0;
+                    self.disc_zone[idx] = 0;
+                    self.disc_gray[idx] = 0;
                     continue;
                 }
                 const outer_a: f32 = if (!aa or rho <= outer_lo) 1.0 else smoothstep(outer_hi, outer_lo, rho);
                 const inner_a: f32 = if (!aa or rho >= inner_hi) 1.0 else smoothstep(inner_lo, inner_hi, rho);
-                self.disc_alpha[idx] = @intFromFloat(std.math.clamp(outer_a * inner_a * 255.0 + 0.5, 0, 255));
+                const base_a = outer_a * inner_a;
+                const rn = rho * inv_rd;
 
                 if (rho > 1e-4) {
-                    const rn = rho * inv_rd;
                     const cphi = (nx * sheen_cx + ny * sheen_sy) / rho;
                     const c2 = cphi * cphi;
                     const c6 = c2 * c2 * c2;
@@ -635,6 +664,83 @@ pub const Renderer = struct {
                     self.disc_sheen[idx] = @intFromFloat(std.math.clamp(w * 256.0, 0, 255));
                 } else {
                     self.disc_sheen[idx] = 0;
+                }
+
+                switch (style) {
+                    .cover => {
+                        self.disc_zone[idx] = 1;
+                        self.disc_gray[idx] = 0;
+                        self.disc_alpha[idx] = @intFromFloat(std.math.clamp(base_a * 255.0 + 0.5, 0, 255));
+                    },
+                    .vinyl => {
+                        if (rn < 0.34) {
+                            self.disc_zone[idx] = 4; // colored vinyl label with rotation stripe
+                            self.disc_gray[idx] = if (rn > 0.322) 180 else 255;
+                        } else {
+                            self.disc_zone[idx] = 3; // black vinyl grooves
+                            const groove = 0.5 + 0.5 * @sin(rn * 260.0);
+                            const v: f32 = 14.0 + 12.0 * groove + (if (rn > 0.96) @as(f32, 10.0) else 0.0);
+                            self.disc_gray[idx] = @intFromFloat(std.math.clamp(v, 0, 255));
+                        }
+                        self.disc_alpha[idx] = @intFromFloat(std.math.clamp(base_a * 255.0 + 0.5, 0, 255));
+                    },
+                    .vinyl_art => {
+                        if (rn < 0.36) {
+                            self.disc_zone[idx] = 2; // cover art scaled inside center label
+                            self.disc_gray[idx] = if (rn > 0.345) 180 else 255;
+                        } else {
+                            self.disc_zone[idx] = 3; // black vinyl grooves
+                            const groove = 0.5 + 0.5 * @sin(rn * 260.0);
+                            const v: f32 = 14.0 + 12.0 * groove + (if (rn > 0.96) @as(f32, 10.0) else 0.0);
+                            self.disc_gray[idx] = @intFromFloat(std.math.clamp(v, 0, 255));
+                        }
+                        self.disc_alpha[idx] = @intFromFloat(std.math.clamp(base_a * 255.0 + 0.5, 0, 255));
+                    },
+                    .cd => {
+                        if (rn < 0.318) {
+                            // Clear polycarbonate inner clamping hub with concentric CD ridges & thick inner rim
+                            self.disc_zone[idx] = 3;
+                            var alpha_f: f32 = 0.22; // translucent plastic base
+                            var tone: f32 = 195.0;
+
+                            // Thick molded plastic edge right around the 15mm center hole
+                            if (rn < 0.152) {
+                                const edge = smoothstep(0.152, 0.125, rn);
+                                alpha_f = @max(alpha_f, 0.28 + 0.44 * edge);
+                                tone = 225.0 + 25.0 * edge;
+                            }
+                            // Concentric CD hub grooves / stacking ring ridges
+                            const r1 = @exp(-std.math.pow(f32, (rn - 0.195) / 0.008, 2.0));
+                            const r2 = @exp(-std.math.pow(f32, (rn - 0.242) / 0.011, 2.0));
+                            const r3 = @exp(-std.math.pow(f32, (rn - 0.278) / 0.007, 2.0));
+                            const ridge = @max(r1 * 0.7, @max(r2, r3 * 0.85));
+                            alpha_f = std.math.clamp(alpha_f + 0.38 * ridge, 0.0, 0.88);
+                            tone = std.math.clamp(tone + 45.0 * ridge, 0.0, 252.0);
+
+                            // Mirror-band silver collar just before printed cover area
+                            if (rn > 0.296) {
+                                const collar = smoothstep(0.296, 0.318, rn);
+                                alpha_f = mix1(alpha_f, 0.82, collar);
+                                tone = mix1(tone, 232.0, collar);
+                            }
+                            self.disc_gray[idx] = @intFromFloat(tone);
+                            self.disc_alpha[idx] = @intFromFloat(std.math.clamp(base_a * alpha_f * 255.0 + 0.5, 0, 255));
+                        } else if (rn > 0.966) {
+                            // Clear polycarbonate outer rim: translucent inside, thicker/more opaque right at the edge
+                            self.disc_zone[idx] = 3;
+                            const rim_t = smoothstep(0.966, 1.0, rn);
+                            const edge_thick = smoothstep(0.985, 1.0, rn);
+                            const alpha_f = 0.28 + 0.22 * rim_t + 0.36 * edge_thick;
+                            const tone = 198.0 + 48.0 * edge_thick;
+                            self.disc_gray[idx] = @intFromFloat(std.math.clamp(tone, 0, 255));
+                            self.disc_alpha[idx] = @intFromFloat(std.math.clamp(base_a * alpha_f * 255.0 + 0.5, 0, 255));
+                        } else {
+                            // Printed CD artwork region
+                            self.disc_zone[idx] = 1;
+                            self.disc_gray[idx] = 0;
+                            self.disc_alpha[idx] = @intFromFloat(std.math.clamp(base_a * 255.0 + 0.5, 0, 255));
+                        }
+                    },
                 }
             }
         }
@@ -650,7 +756,7 @@ pub const Renderer = struct {
         rh: f32,
         p: *const Params,
     ) void {
-        self.ensureDiscLut(side, box_w, box_h, rd, rh, p.aa);
+        self.ensureDiscLut(side, box_w, box_h, rd, rh, p.aa, p.disc_style);
         if (self.disc_alpha.len != side * side) return;
 
         const ca = @cos(p.angle);
@@ -661,12 +767,15 @@ pub const Renderer = struct {
         const du_dx = dx_step * ca * inv_rd;
         const dv_dx = -dx_step * sa * inv_rd;
         const nx0 = (0.5 * inv_side - 0.5) * box_w;
+        const inv_label: f32 = 1.0 / 0.36;
 
         const use_old = self.fade < 1.0 and self.old_img != null and self.old_tex.size == self.tex.size;
         const fade_u: u32 = @intFromFloat(std.math.clamp(self.fade * 256.0, 0, 256));
         const ifx_u: u32 = 256 - fade_u;
         const do_sheen = p.sheen;
         const do_aa = p.aa;
+        const is_cd = p.disc_style == .cd;
+        const label_rgb: [3]u8 = if (self.img) |im| .{ im.c1.r, im.c1.g, im.c1.b } else .{ 190, 90, 90 };
 
         for (0..side) |py| {
             const ny = ((@as(f32, @floatFromInt(py)) + 0.5) * inv_side - 0.5) * box_h;
@@ -675,7 +784,8 @@ pub const Renderer = struct {
             const lut_row = py * side;
             const out_row = lut_row * 4;
             for (0..side) |px| {
-                const a = self.disc_alpha[lut_row + px];
+                const idx = lut_row + px;
+                const a = self.disc_alpha[idx];
                 const o = out_row + px * 4;
                 if (a == 0) {
                     rgba[o] = 0;
@@ -687,17 +797,70 @@ pub const Renderer = struct {
                     continue;
                 }
 
-                var col = if (do_aa) self.tex.sampleBilinear(u, v) else self.tex.sampleNearest(u, v);
-                if (use_old) {
-                    const ocol = if (do_aa) self.old_tex.sampleBilinear(u, v) else self.old_tex.sampleNearest(u, v);
-                    col = .{
-                        @intCast((ifx_u * ocol[0] + fade_u * col[0] + 128) >> 8),
-                        @intCast((ifx_u * ocol[1] + fade_u * col[1] + 128) >> 8),
-                        @intCast((ifx_u * ocol[2] + fade_u * col[2] + 128) >> 8),
-                    };
+                const zone = self.disc_zone[idx];
+                var col: [3]u8 = undefined;
+                switch (zone) {
+                    1 => {
+                        col = if (do_aa) self.tex.sampleBilinear(u, v) else self.tex.sampleNearest(u, v);
+                        if (use_old) {
+                            const ocol = if (do_aa) self.old_tex.sampleBilinear(u, v) else self.old_tex.sampleNearest(u, v);
+                            col = .{
+                                @intCast((ifx_u * ocol[0] + fade_u * col[0] + 128) >> 8),
+                                @intCast((ifx_u * ocol[1] + fade_u * col[1] + 128) >> 8),
+                                @intCast((ifx_u * ocol[2] + fade_u * col[2] + 128) >> 8),
+                            };
+                        }
+                    },
+                    2 => {
+                        const lu = u * inv_label;
+                        const lv = v * inv_label;
+                        col = if (do_aa) self.tex.sampleBilinear(lu, lv) else self.tex.sampleNearest(lu, lv);
+                        if (use_old) {
+                            const ocol = if (do_aa) self.old_tex.sampleBilinear(lu, lv) else self.old_tex.sampleNearest(lu, lv);
+                            col = .{
+                                @intCast((ifx_u * ocol[0] + fade_u * col[0] + 128) >> 8),
+                                @intCast((ifx_u * ocol[1] + fade_u * col[1] + 128) >> 8),
+                                @intCast((ifx_u * ocol[2] + fade_u * col[2] + 128) >> 8),
+                            };
+                        }
+                        const g: u32 = self.disc_gray[idx];
+                        if (g < 255) {
+                            col = .{
+                                @intCast((@as(u32, col[0]) * g) >> 8),
+                                @intCast((@as(u32, col[1]) * g) >> 8),
+                                @intCast((@as(u32, col[2]) * g) >> 8),
+                            };
+                        }
+                    },
+                    3 => {
+                        const g = self.disc_gray[idx];
+                        if (is_cd) {
+                            // Subtle cool polycarbonate tint for CD clear plastic hub & rim
+                            col = .{ @min(255, g -| 6), g, @min(255, @as(u16, g) + 10) };
+                        } else {
+                            col = .{ g, g, @min(255, @as(u16, g) + 2) };
+                        }
+                    },
+                    4 => {
+                        if (@abs(v) < 0.035 and u > 0.08 and u < 0.28) {
+                            col = .{ 245, 245, 245 };
+                        } else {
+                            col = label_rgb;
+                        }
+                        const g: u32 = self.disc_gray[idx];
+                        if (g < 255) {
+                            col = .{
+                                @intCast((@as(u32, col[0]) * g) >> 8),
+                                @intCast((@as(u32, col[1]) * g) >> 8),
+                                @intCast((@as(u32, col[2]) * g) >> 8),
+                            };
+                        }
+                    },
+                    else => col = .{ 0, 0, 0 },
                 }
+
                 if (do_sheen) {
-                    const sw: u32 = self.disc_sheen[lut_row + px];
+                    const sw: u32 = self.disc_sheen[idx];
                     if (sw > 0) {
                         col = .{
                             @intCast(col[0] + (((255 - @as(u32, col[0])) * sw) >> 8)),
@@ -1113,6 +1276,7 @@ pub const Renderer = struct {
                 " 1/2 3/4 intensità glow / aurora",
                 " c       colori fx cover/freq",
                 " d / x   risoluzione / AA disco",
+                " o       stile cover/vinyl/v.art/CD",
                 " m       info auto/mostra/nascondi",
                 " l       riflessi on/off",
                 " b       sfondo tinta/nero",
