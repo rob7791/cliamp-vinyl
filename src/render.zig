@@ -277,6 +277,7 @@ pub const Renderer = struct {
     last_sheen: bool = false,
     last_aa: bool = true,
     last_style: DiscStyle = .cover,
+    last_bg_mode: BgMode = .tint,
 
     // precomputed per-pixel circular mask, zone, grooves/plastic & static sheen LUT (rebuilt only on geometry/AA/style change)
     lut_side: usize = 0,
@@ -729,6 +730,7 @@ pub const Renderer = struct {
                         self.last_side != side or @abs(self.last_aspect - k) > 1e-4 or
                         self.last_img_gen != self.img_gen or self.last_sheen != p.sheen or
                         self.last_aa != p.aa or self.last_style != p.disc_style or
+                        self.last_bg_mode != p.bg_mode or
                         self.fade < 1.0 or self.last_fade < 1.0 or
                         eff_angle != self.last_angle;
                     if (dirty) {
@@ -751,6 +753,7 @@ pub const Renderer = struct {
                             self.last_sheen = p.sheen;
                             self.last_aa = p.aa;
                             self.last_style = p.disc_style;
+                            self.last_bg_mode = p.bg_mode;
                         }
                     }
                 }
@@ -959,6 +962,7 @@ pub const Renderer = struct {
         const do_sheen = p.sheen;
         const do_aa = p.aa;
         const is_cd = p.disc_style == .cd;
+        const dark_vinyl = !is_cd and p.bg_mode == .black;
         const label_rgb: [3]u8 = if (self.img) |im| .{ im.c1.r, im.c1.g, im.c1.b } else .{ 190, 90, 90 };
 
         for (0..side) |py| {
@@ -1021,6 +1025,10 @@ pub const Renderer = struct {
                         if (is_cd) {
                             // Subtle cool polycarbonate tint for CD clear plastic hub & rim
                             col = .{ @min(255, g -| 6), g, @min(255, @as(u16, g) + 10) };
+                        } else if (dark_vinyl) {
+                            // Deep near-black vinyl grooves on black background
+                            const dg: u8 = @intCast((@as(u32, g) * 100) >> 8);
+                            col = .{ dg, dg, @min(255, @as(u16, dg) + 1) };
                         } else {
                             col = .{ g, g, @min(255, @as(u16, g) + 2) };
                         }
@@ -1044,7 +1052,8 @@ pub const Renderer = struct {
                 }
 
                 if (do_sheen) {
-                    const sw: u32 = self.disc_sheen[idx];
+                    const sw_raw: u32 = self.disc_sheen[idx];
+                    const sw: u32 = if (dark_vinyl and zone == 3) (sw_raw * 184) >> 8 else sw_raw;
                     if (sw > 0) {
                         col = .{
                             @intCast(col[0] + (((255 - @as(u32, col[0])) * sw) >> 8)),
