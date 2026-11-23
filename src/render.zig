@@ -1271,7 +1271,7 @@ pub const Renderer = struct {
     fn drawStars(self: *const Renderer, s: *Screen, cx: f32, cy: f32, excl_r: f32, k: f32, c2: [3]f32, viz_color: VizColor) void {
         if (s.cols < 4 or s.rows < 4) return;
         const star_col: [3]f32 = if (viz_color == .freq)
-            .{ 255, 255, 150 } // luminous starlight yellow (coherent with high-freq yellow)
+            .{ 160, 240, 160 } // luminous starlight limegreen (coherent with high-freq limegreen)
         else
             mix3(c2, .{ 255, 255, 255 }, 0.68);
         const excl_r2 = excl_r * excl_r;
@@ -1584,7 +1584,7 @@ pub const Renderer = struct {
         const peak_w = k * 0.13;
         const path_w = k * 0.14;
         const white = [3]f32{ 255, 255, 255 };
-        // Ellipsis 3-line colors: frequency palette (rebeccapurple/teal/yellow) or 3 tones of cover base color
+        // Ellipsis 3-line colors: frequency palette (rebeccapurple/teal/limegreen) or 3 tones of cover base color
         const band_low_col: Rgb = if (p.viz_color == .freq)
             .{ .r = 102, .g = 51, .b = 153 }
         else
@@ -1594,7 +1594,7 @@ pub const Renderer = struct {
         else
             (if (p.peak_mode == .ellipsis2) brightSaturate(c1) else toRgb(c1));
         const band_high_col: Rgb = if (p.viz_color == .freq)
-            .{ .r = 255, .g = 255, .b = 0 }
+            .{ .r = 50, .g = 205, .b = 50 }
         else
             toRgb(mix3(c2, white, 0.52));
 
@@ -1801,7 +1801,7 @@ pub const Renderer = struct {
             (if (p.peak_mode == .ellipsis2) Rgb{ .r = 0, .g = 185, .b = 185 } else Rgb{ .r = 0, .g = 128, .b = 128 })
         else
             (if (p.peak_mode == .ellipsis2) brightSaturate(c1) else toRgb(c1));
-        const band_high_col: Rgb = if (p.viz_color == .freq) .{ .r = 255, .g = 255, .b = 0 } else toRgb(mix3(c2, white, 0.52));
+        const band_high_col: Rgb = if (p.viz_color == .freq) .{ .r = 50, .g = 205, .b = 50 } else toRgb(mix3(c2, white, 0.52));
 
         for (0..bar_rows) |dr| {
             const r = row0 + dr;
@@ -2084,7 +2084,7 @@ fn smoothstep(e0: f32, e1: f32, x: f32) f32 {
 fn pathBandColor(u: f32) [3]f32 {
     const low = [3]f32{ 102, 51, 153 }; // rebeccapurple
     const mid = [3]f32{ 0, 128, 128 }; // teal
-    const high = [3]f32{ 255, 255, 0 }; // yellow
+    const high = [3]f32{ 50, 205, 50 }; // limegreen
     if (u <= 0.26) return low;
     if (u < 0.44) return mix3(low, mid, smoothstep(0.26, 0.44, u));
     if (u <= 0.56) return mid;
@@ -2283,7 +2283,7 @@ test "PeakMode.ellipsis draws 3-band colors and PeakMode.path draws skyblue 1:1 
             if (cell.cp >= 0x2800 and cell.cp <= 0x28FF) {
                 if (cell.fg.r == 102 and cell.fg.g == 51 and cell.fg.b == 153) low_cells += 1;
                 if (cell.fg.r == 0 and cell.fg.g == 128 and cell.fg.b == 128) mid_cells += 1;
-                if (cell.fg.r == 255 and cell.fg.g == 255 and cell.fg.b == 0) high_cells += 1;
+                if (cell.fg.r == 50 and cell.fg.g == 205 and cell.fg.b == 50) high_cells += 1;
             }
         }
     }
@@ -2346,7 +2346,7 @@ test "PeakMode.ellipsis draws 3-band colors and PeakMode.path draws skyblue 1:1 
             if (cell.cp >= 0x2800 and cell.cp <= 0x28FF) {
                 if (cell.fg.r == 102 and cell.fg.g == 51 and cell.fg.b == 153) path_low += 1;
                 if (cell.fg.r == 0 and cell.fg.g == 128 and cell.fg.b == 128) path_mid += 1;
-                if (cell.fg.r == 255 and cell.fg.g == 255 and cell.fg.b == 0) path_high += 1;
+                if (cell.fg.r == 50 and cell.fg.g == 205 and cell.fg.b == 50) path_high += 1;
             }
         }
     }
