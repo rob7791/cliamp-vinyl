@@ -1027,8 +1027,8 @@ pub const Renderer = struct {
                             col = .{ @min(255, g -| 6), g, @min(255, @as(u16, g) + 10) };
                         } else if (dark_vinyl) {
                             // Deep near-black vinyl grooves on black background
-                            const dg: u8 = @intCast((@as(u32, g) * 100) >> 8);
-                            col = .{ dg, dg, @min(255, @as(u16, dg) + 1) };
+                            const dg: u8 = @intCast((@as(u32, g) * 64) >> 8);
+                            col = .{ dg, dg, dg };
                         } else {
                             col = .{ g, g, @min(255, @as(u16, g) + 2) };
                         }
