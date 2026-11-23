@@ -1030,7 +1030,9 @@ pub const Renderer = struct {
                             const dg: u8 = @intCast((@as(u32, g) * 64) >> 8);
                             col = .{ dg, dg, dg };
                         } else {
-                            col = .{ g, g, @min(255, @as(u16, g) + 2) };
+                            // Darker vinyl grooves on tinted background
+                            const dg: u8 = @intCast((@as(u32, g) * 100) >> 8);
+                            col = .{ dg, dg, @min(255, @as(u16, dg) + 1) };
                         }
                     },
                     4 => {
@@ -1053,7 +1055,7 @@ pub const Renderer = struct {
 
                 if (do_sheen) {
                     const sw_raw: u32 = self.disc_sheen[idx];
-                    const sw: u32 = if (dark_vinyl and zone == 3) (sw_raw * 184) >> 8 else sw_raw;
+                    const sw: u32 = if (!is_cd and zone == 3) (sw_raw * 184) >> 8 else sw_raw;
                     if (sw > 0) {
                         col = .{
                             @intCast(col[0] + (((255 - @as(u32, col[0])) * sw) >> 8)),
