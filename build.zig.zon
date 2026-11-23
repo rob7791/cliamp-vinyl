@@ -1,6 +1,6 @@
 .{
     .name = .vinyl,
-    .version = "0.1.0",
+    .version = "0.2.0-alpha.1",
     .minimum_zig_version = "0.15.1",
     .fingerprint = 0xe2e531d93ceefe8,
     .dependencies = .{},
