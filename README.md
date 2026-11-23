@@ -135,7 +135,7 @@ Tutti gli argomenti non riconosciuti da `vinyl` vengono inoltrati direttamente a
 | `5` / `6` | Diminuisce / aumenta la quantità di puntini/stelline scintillanti su piatti e tintinnii (9.5–16 kHz; `0` = off, fino a `10`, default `3`) |
 | `7` / `8` | Diminuisce / aumenta la quantità di filamenti ondulati sui suoni medi sostenuti (pianoforte, trombe, sax; `0` = off, fino a `10`, default `4`) |
 | `9` | Cicla i **cerchi concentrici** (colore `freq`): `off` *(default)* → `kick` *(colpi di cassa 100–300 Hz)* → `vocal` *(voce cantante centrata 700 Hz – 3.5 kHz)* |
-| `c` | Alterna il colore del **bagliore cassa** tra quello derivato dalla copertina (`cover`) e quello coerente con la frequenza predominante (tra `rebeccapurple` e `teal`); l'**aurora** mantiene sempre la tonalità `rebeccapurple` |
+| `c` | Alterna il colore del **bagliore cassa** tra quello derivato dalla copertina (`cover`) e quello coerente con la frequenza predominante (tra `rebeccapurple` e `teal`); l'**aurora** usa la tonalità `rebeccapurple` su sfondo nero e scurisce sfondo e bagliori verso il nero su sfondo in tinta |
 | `d` | Cicla la risoluzione massima del disco Kitty: `512px` *(default)* → `768px` (ultra) → `384px` (veloce) |
 | `x` | Attiva/disattiva l'antialiasing del disco (bordo circolare + filtro bilineare vs nearest-neighbor) |
 | `o` | Cicla lo stile del disco: `cover` *(default, copertina circolare dritta senza foro centrale né rotazione)* → `vinyl` *(vinile nero con etichetta colorata)* → `vinyl art` *(vinile nero con copertina nell'etichetta centrale)* → `CD` *(compact disc con foro/hub trasparente e bordo esterno in plastica semitrasparente)* |

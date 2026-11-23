@@ -694,7 +694,7 @@ pub const Renderer = struct {
                 self.drawGlow(s, cx, cy, rd, rmax, s.rows, k, glow_src, pal.c2, bgf, p.glow_gain);
             }
             if (p.aurora and (self.sub_l > 0.004 or self.sub_r > 0.004)) {
-                self.drawAurora(s, s.rows, p.fx_color, p.aurora_gain);
+                self.drawAurora(s, s.rows, p.bg_mode, p.aurora_gain);
             }
             const excl_r = if (p.viz_layout == .circular) r0 + ring_min + 1.0 else rd;
             if (p.wave_level > 0) {
@@ -1126,7 +1126,9 @@ pub const Renderer = struct {
     }
 
     /// Darkening storm-like aurora creeping inward from left & right screen edges on 20–80 Hz sub-bass.
-    fn drawAurora(self: *const Renderer, s: *Screen, vis_rows: usize, fx_color: FxColorMode, gain: f32) void {
+    /// On black background it tints with deep rebeccapurple; on tinted background it darkens (fades) the
+    /// background and any underlying glows toward black with the same intensity profile.
+    fn drawAurora(self: *const Renderer, s: *Screen, vis_rows: usize, bg_mode: BgMode, gain: f32) void {
         if (s.cols < 4 or vis_rows < 2) return;
         const g = std.math.clamp(gain, 0.1, 3.0);
         const sl = std.math.clamp(self.sub_l * g, 0.0, 1.8);
@@ -1169,9 +1171,10 @@ pub const Renderer = struct {
                 if (amt <= 0.005) continue;
 
                 const cell = s.at(c, r);
-                _ = fx_color;
-                // Always use the deep rebeccapurple storm aurora tint so it remains clearly visible in both fx modes
-                const bg = toRgb(mix3(toF(cell.bg), storm_tint, amt));
+                // On tinted background, fade cell bg (including underlying glows) toward black;
+                // on black background, tint with deep rebeccapurple storm aurora.
+                const target: [3]f32 = if (bg_mode == .tint) .{ 0, 0, 0 } else storm_tint;
+                const bg = toRgb(mix3(toF(cell.bg), target, amt));
                 cell.bg = bg;
                 if (cell.cp == ' ') cell.fg = bg;
             }
@@ -2492,9 +2495,34 @@ test "sub-bass storm aurora darkens screen edges on 20-80Hz rumble" {
     const dark_l = s.at(0, 18).bg;
     const dark_r = s.at(119, 18).bg;
     try std.testing.expect(r.sub_l > 0.5 and r.sub_r > 0.5);
-    // Storm aurora tints both screen edges with deep rebeccapurple (b > r > g)
-    try std.testing.expect(dark_l.b > dark_l.r and dark_l.r > dark_l.g);
-    try std.testing.expect(dark_r.b > dark_r.r and dark_r.r > dark_r.g);
-    try std.testing.expect(dark_l.b != base_l.b or dark_l.r != base_l.r);
-    try std.testing.expect(dark_r.b != base_r.b or dark_r.r != base_r.r);
+    // On tinted background, storm aurora darkens both screen edges toward black
+    try std.testing.expect(dark_l.r < base_l.r and dark_l.g < base_l.g and dark_l.b < base_l.b);
+    try std.testing.expect(dark_r.r < base_r.r and dark_r.g < base_r.g and dark_r.b < base_r.b);
+
+    // On black background, storm aurora tints both screen edges with deep rebeccapurple (b > r > g)
+    r.render(&s, .{
+        .aspect = 2.0,
+        .angle = 0.0,
+        .dt = 1.0 / 60.0,
+        .left = &zero_bars,
+        .right = &zero_bars,
+        .raw_left = &sub_bars,
+        .raw_right = &sub_bars,
+        .snap = &snap,
+        .position = 0,
+        .sheen = false,
+        .bass_top = false,
+        .show_fps = false,
+        .show_help = false,
+        .fps = 60.0,
+        .peak_mode = .path,
+        .glow = false,
+        .aurora = true,
+        .bg_mode = .black,
+        .cava_ok = true,
+    });
+    const purple_l = s.at(0, 18).bg;
+    const purple_r = s.at(119, 18).bg;
+    try std.testing.expect(purple_l.b > purple_l.r and purple_l.r > purple_l.g);
+    try std.testing.expect(purple_r.b > purple_r.r and purple_r.r > purple_r.g);
 }

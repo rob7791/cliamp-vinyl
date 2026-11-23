@@ -271,7 +271,11 @@ pub fn main() !void {
                 'l' => sheen = !sheen,
                 'i' => bass_top = !bass_top,
                 'f' => show_fps = !show_fps,
-                'b' => bg_mode = if (bg_mode == .tint) .black else .tint,
+                'b' => {
+                    bg_mode = if (bg_mode == .tint) .black else .tint;
+                    hud_msg = if (bg_mode == .tint) " bg: tint " else " bg: black ";
+                    hud_timer = 2.0;
+                },
                 '[' => {
                     rpm_manual = true;
                     rpm = if (rpm <= 10.0) @max(0.0, rpm - 1.0) else @max(10.0, rpm - 5.0);
